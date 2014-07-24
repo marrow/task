@@ -20,3 +20,6 @@ notifications:
 
 after_success:
   - coveralls
+
+services:
+  - mongodb
