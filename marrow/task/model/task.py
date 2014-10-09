@@ -9,7 +9,7 @@ from mongoengine import Document, ReferenceField, IntField, StringField, DictFie
 from ..compat import py2, unicode
 from ..exc import AcquireFailed
 from .query import TaskQuerySet
-from .embed import Owner
+from .embed import Owner, Retry, Progress
 from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled
 
 
@@ -42,9 +42,9 @@ class Task(Document):
 	_executed = DateTimeField(db_field='de', default=None)
 	_completed = DateTimeField(db_field='dc', default=None)
 	_cancelled = DateTimeField(db_field='dx', default=None)
-	_expires = DateTimeField(db_field='dx', default=None)  # After completion we don't want these records sticking around.
+	_expires = DateTimeField(db_field='dp', default=None)  # After completion we don't want these records sticking around.
 	
-	_creator = EmbeddedDocumentField(Owner, db_field='r', default=Owner.identity)
+	_creator = EmbeddedDocumentField(Owner, db_field='c', default=Owner.identity)
 	_owner = EmbeddedDocumentField(Owner, db_field='o')
 	_retry = EmbeddedDocumentField(Retry, db_field='r', default=Retry)
 	_progress = EmbeddedDocumentField(Progress, db_field='p', default=Progress)
@@ -208,13 +208,12 @@ class Task(Document):
 		
 		count = self.objects(id=self.id, executed=None, cancelled=None).update(
 				set__executed = now,
-				set__
 			)
 		
 		try:
 			result = self._execute_standard()
 		except:
-			self.objects(id=self.id, executed=).update(
+			self.objects(id=self.id, executed=None).update(
 					
 				)
 		
@@ -345,7 +344,7 @@ class Task(Document):
 		
 		# Otherwise we wait.
 		for event in self.messages.tail(timeout=timeout):
-			
+			pass
 		
 		pass
 	
