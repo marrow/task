@@ -15,7 +15,7 @@ Marrow Task
 1. What is Marrow Task?
 =======================
 
-Marrow Task is a light-weight yet powerful, fully tested, Python 2.7+ and 3.2+ compatible distributed task execution
+Marrow Task is a light-weight yet powerful, fully tested, Python 2.7+ and 3.3+ compatible distributed task execution
 system.  It is built entirely around several core (though under-utilized) features of MongoDB and builds upon the
 powerful MongoEngine object document mapper.
 
@@ -69,7 +69,24 @@ side-effects when updating.  Use ``marrow.task<1.1`` to get all bugfixes for the
 ``marrow.task<2.0`` to get bugfixes and feature updates while ensuring that large breaking changes are not installed.
 
 
-2.1. Development Version
+2.1. Requirements
+-----------------
+
+Due to some of the fairly advanced things Marrow Task does, certain versions of Python are explicitly not supported.
+Notably due to the removal of function wrappers (which add ``im_class`` to the mix) in Python 3.0, only Python 3
+versions later than 3.3 (which introduced ``__qualname__`` to replace ``im_class`` magic) will work if you make use of
+static or class methods as execution targets.
+
+This restriction is soft; if you choose to install Marrow Task on earlier Python 3 versions we will issue a huge
+warning up front, but the remainder of the functionality should continue to operate.
+
+Additionally, several other components are needed in order to make use of Marrow Task:
+
+* A MongoDB 2.0 or later service.
+* MongoEngine
+
+
+2.2. Development Version
 ------------------------
 
     |developstatus| |developcover|

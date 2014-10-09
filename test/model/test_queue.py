@@ -109,7 +109,7 @@ class TestCappedQueries(object):
 			# Specifically, the original query will have timed out and a new one
 			# will have to be generated.
 			if count == 100:
-				sleep(1)
+				sleep(2)
 				seen = record.id
 			
 			if record.message == 'last': break

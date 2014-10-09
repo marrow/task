@@ -1,9 +1,28 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+from __future__ import print_function
+
 import os
 import sys
 import codecs
+
+
+# This is an extreme test for use of __qualname__ and im_class.
+
+class Mine(object):
+	def canary(self):
+		pass
+
+if not hasattr(Mine.canary, 'im_class') and not hasattr(Mine.canary, '__qualname__'):
+	os.environ['CANARY'] = "DEAD"
+	print("*" * 79, file=sys.stderr)
+	print(" WARNING: You are executing marrow.tasks under a Python version that supports", file=sys.stderr)
+	print(" neither im_class nor __qualname__ on class methods.  Attempts to use class", file=sys.stderr)
+	print(" methods as execution targets WILL FAIL GLORIOUSLY.", file=sys.stderr)
+	print(" See: https://github.com/marrow/marrow.task/#21-requirements")
+	print("*" * 79, file=sys.stderr)
+
 
 try:
 	from setuptools.core import setup, find_packages
@@ -72,7 +91,7 @@ setup(
 	include_package_data = True,
 	namespace_packages = ['marrow'],
 	
-	install_requires = ['mongoengine'] if sys.version_info < (2, 7) else ['mongoengine'],
+	install_requires = ['mongoengine', 'pytz'],
 	
 	extras_require = dict(
 			development = tests_require,

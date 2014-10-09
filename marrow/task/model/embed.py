@@ -26,15 +26,15 @@ class Owner(EmbeddedDocument):
 	# Magic Python Methods
 	
 	def __repr__(self):
-		return b'Owner("{0.host}", pid={0.pid}, ppid={0.ppid})'.format(self)
+		return 'Owner("{0.host}", pid={0.pid}, ppid={0.ppid})'.format(self)
 	
 	def __str__(self):
-		return "{0.host}:{0.ppid}.{0.pid}".format(self)
+		return "{0.host}:{0.ppid}:{0.pid}".format(self)
 	
 	def __bytes__(self):
 		return unicode(self).encode('unicode_escape')
 	
-	if py2:
+	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
 
@@ -51,12 +51,33 @@ class Retry(EmbeddedDocument):
 	maximum = IntField(db_field='m', default=0)
 	
 	delay = IntField(db_field='d', default=0)  # In seconds.
+	
+	# Magic Python Methods
+	
+	def __repr__(self):
+		if not self.maximum:
+			return 'Retry(None)'
+		
+		return 'Retry({0.current}/{0.maximum}, {0.delay})'.format(self)
+	
+	def __str__(self):
+		if not self.maximum:
+			return "First and only attempt."
+		
+		return "Attempt {0.current} of {0.maximum}, {0.delay} seconds between tries.".format(self)
+	
+	def __bytes__(self):
+		return unicode(self).encode('unicode_escape')
+	
+	if py2:  # pragma: no cover
+		__unicode__ = __str__
+		__str__ = __bytes__
 
 
 class Progress(EmbeddedDocument):
 	"""Task progress information.
 	
-	Not all tasks benefit from this; they generally need to be coded as generators yielding ProgressMessage instances.
+	Not all tasks benefit from this; they generally need to be coded as generators yielding Progress instances.
 	"""
 	
 	meta = dict(allow_inheritance=False)
@@ -64,3 +85,22 @@ class Progress(EmbeddedDocument):
 	current = IntField(db_field='c', default=0)
 	maximum = IntField(db_field='m', default=0)
 	messages = ListField(DynamicField(), default=list)
+	
+	@property
+	def percentage(self):
+		if not self.maximum: return None
+		return self.current * 1.0 / self.maximum
+	
+	def __unicode__(self):
+		if self.messages:
+			return self.messages[-1].format(**self.replacements)
+		
+		if self.total:
+			return "{0:.0%}%".format(self.percentage)
+		
+		return "Task indicates progress."
+	
+	def __repr__(self, inner=None):
+		pct = "{0:.0%}%".format(self.percentage) if self.total else "N/A"
+		msg = '"{0}"'.format(self.message.format(**self.replacements)) if self.message else "None"
+		return super(Progress, self).__repr__('{0.current}/{0.total}, {1}, message={2}'.format(self, pct, msg))

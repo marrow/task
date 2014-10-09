@@ -3,5 +3,9 @@
 """Exception classes."""
 
 
+class AcquireFailed(Exception):
+	pass
+
+
 class TaskException(Exception):
 	pass
