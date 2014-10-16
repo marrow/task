@@ -34,18 +34,18 @@ def resolve(obj):
 	return getmodule(obj).__name__ + ':' + q
 
 
-def lookup(target, namespace=None):
+def load(target, namespace=None):
 	"""This helper function loads an object identified by a dotted-notation string.
 	
 	For example::
 	
 		# Load class Foo from example.objects
-		load_object('example.objects:Foo')
+		load('example.objects:Foo')
 	
 	If a plugin namespace is provided simple name references are allowed.  For example::
 	
 		# Load the plugin named 'routing' from the 'web.dispatch' namespace
-		load_object('routing', 'web.dispatch')
+		load('routing', 'web.dispatch')
 	
 	Providing a namespace does not prevent full object lookup (dot-colon notation) from working.
 	"""

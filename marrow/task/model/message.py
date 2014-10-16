@@ -56,7 +56,7 @@ class Keepalive(Message):
 class TaskMessage(Message):
 	"""Messages which relate to queued jobs.
 	
-	For an easy way to monitor all messages relating to a Task, use the Task's `monitor` method.
+	For an easy way to monitor all messages relating to a Task, use the Task's `messages` attribute.
 	"""
 	
 	task = ReferenceField('Task', required=True, db_field='t')
@@ -66,6 +66,9 @@ class TaskMessage(Message):
 			return super(TaskMessage, self).__repr__('task={0.task.id}, {1}'.format(self, inner))
 		
 		return super(TaskMessage, self).__repr__('task={0.task.id}'.format(self))
+	
+	if py2:  # pragma: no cover
+		__unicode__ = __str__
 
 
 class TaskAdded(TaskMessage):
@@ -103,6 +106,9 @@ class TaskProgress(TaskMessage):
 		pct = "{0:.0%}%".format(self.percentage) if self.total else "N/A"
 		msg = '"{0}"'.format(self.message.format(**self.replacements)) if self.message else "None"
 		return super(TaskProgress, self).__repr__('{0.current}/{0.total}, {1}, message={2}'.format(self, pct, msg))
+	
+	if py2:  # pragma: no cover
+		__unicode__ = __str__
 
 
 class TaskAcquired(TaskMessage):
@@ -110,24 +116,29 @@ class TaskAcquired(TaskMessage):
 	
 	def __unicode__(self):
 		return "Task {0.task.id} locked by PID {0.sender.pid} on host: {0.sender.host}".format(self)
+	
+	if py2:  # pragma: no cover
+		__unicode__ = __str__
 
 
 class TaskCancelled(TaskMessage):
 	"""Indicate that a task has been cancelled."""
 	
-	by = EmbeddedDocumentField(Owner, db_field='b', default=Owner.identity)
-	
 	def __unicode__(self):
-		return "Task {0.task.id} cancelled by PID {0.by.pid} on host: {0.by.host}".format(self)
+		return "Task {0.task.id} cancelled by PID {0.sender.pid} on host: {0.sender.host}".format(self)
 	
-	def __repr__(self, inner=None):
-		return super(TaskAcquired, self).__repr__('host={0.host}, pid={0.pid}, ppid={0.ppid}'.format(self.owner))
+	if py2:  # pragma: no-cover
+		__unicode__ = __str__
 
 
 class TaskRetry(TaskMessage):
 	"""Indicates the given task has been rescheduled."""
 	
-	pass
+	def __unicode__(self):
+		return "Task {0.task.id} scheduled for retry by PID {0.sender.pid} on host: {0.sender.host}".format(self)
+	
+	if py2:  # pragma: no cover
+		__unicode__ = __str__
 
 
 class TaskComplete(TaskMessage):
@@ -138,3 +149,15 @@ class TaskComplete(TaskMessage):
 	
 	success = BooleanField(db_field='s', default=True)
 	result = DynamicField(db_field='r')
+	
+	def __unicode__(self):
+		if self.success:
+			return "Task {0.task.id} completed successfully.".format(self)
+		
+		return "Task {0.task.id} failed to complete successfully.".format(self)
+	
+	def __repr__(self, inner=None):
+		return super(TaskComplete, self).__repr__('success={0!r}'.format(self.success))
+	
+	if py2:  # pragma: no cover
+		__unicode__ = __str__

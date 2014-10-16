@@ -85,6 +85,7 @@ class Progress(EmbeddedDocument):
 	current = IntField(db_field='c', default=0)
 	maximum = IntField(db_field='m', default=0)
 	messages = ListField(DynamicField(), default=list)
+	replacements = DictField(db_field='r', default=dict)
 	
 	@property
 	def percentage(self):
@@ -93,14 +94,13 @@ class Progress(EmbeddedDocument):
 	
 	def __unicode__(self):
 		if self.messages:
-			return self.messages[-1].format(**self.replacements)
+			return self.messages[-1].format(**dict(self.replacements, progress=self))
 		
-		if self.total:
-			return "{0:.0%}%".format(self.percentage)
+		if self.maximum:
+			return "{0.percentage:.0%}% ({0.current}/{0.total})".format(self)
 		
 		return "Task indicates progress."
 	
 	def __repr__(self, inner=None):
-		pct = "{0:.0%}%".format(self.percentage) if self.total else "N/A"
-		msg = '"{0}"'.format(self.message.format(**self.replacements)) if self.message else "None"
-		return super(Progress, self).__repr__('{0.current}/{0.total}, {1}, message={2}'.format(self, pct, msg))
+		pct = "{0:.0%}%".format(self.percentage) if self.maximum else "N/A"
+		return super(Progress, self).__repr__('{0.current}/{0.total}, {1}, messages={2}'.format(self, pct, len(self.messages)))
