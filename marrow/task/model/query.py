@@ -1,7 +1,8 @@
 # encoding: utf-8
 
-from __future__ import unicode_literals
+from __future__ import print_function, unicode_literals
 
+import time
 from mongoengine import QuerySet
 from pymongo.errors import OperationFailure, ExecutionTimeout
 
@@ -32,7 +33,7 @@ class CappedQuerySet(QuerySet):
 		if timeout: timeout = int(timeout * 1000)
 		
 		# Prepare the query and extract often-reused values.
-		q = self.clone().filter(*q_objs, **query)
+		q = self.clone().timeout(False).filter(*q_objs, **query)
 		collection = q._collection
 		query = q._query
 		
@@ -44,15 +45,17 @@ class CappedQuerySet(QuerySet):
 		
 		try:
 			while True:  # Primary retry loop.
-				cursor = collection.find(query, tailable=True, await_data=True)
+				cursor = collection.find(query, tailable=True, await_data=True, **q._cursor_args)
 				if timeout: cursor = cursor.max_time_ms(timeout)
 				
 				while cursor.alive:  # Inner record loop; may time out.
 					for record in cursor:  # This will block until data is available.
 						last = record['_id']
 						yield self._document._from_son(record, _auto_dereference=self._auto_dereference)
+					else:
+						return  # We timed out.
 				
-				query.update(_id={"$gte": last})
+				query.update(_id={"$gt": last})
 		
 		except ExecutionTimeout:
 			return
