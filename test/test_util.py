@@ -33,8 +33,8 @@ class TestResolveMarrowTask(object):
 	@canaried
 	def test_method(self):
 		from marrow.task.model.task import Task
-		assert resolve(Task().acquire) == 'marrow.task.model.task:Task.acquire'
-		assert resolve(Task.acquire) == 'marrow.task.model.task:Task.acquire'
+		assert resolve(Task().acquire) == 'marrow.task.model.task:TaskPrivateMethods.acquire'
+		assert resolve(Task.acquire) == 'marrow.task.model.task:TaskPrivateMethods.acquire'
 	
 	@canaried
 	def test_class_method(self):

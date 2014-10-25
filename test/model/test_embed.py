@@ -37,3 +37,6 @@ class TestOwner(object):
 class TestRetry(object):
 	pass
 
+
+class TestProgress(object):
+	pass

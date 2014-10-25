@@ -46,7 +46,9 @@ class TestCappedQueries(object):
 	
 	def test_list_timeout(self, message):
 		start = time()
+		
 		result = list(Log.objects.tail(timeout=2))
+		
 		delta = time() - start
 		assert 1.9 < delta < 2.1  # Small fudge factor.
 		
@@ -54,8 +56,10 @@ class TestCappedQueries(object):
 	
 	def test_loop_timeout(self, message):
 		start = time()
+		
 		for record in Log.objects.tail(timeout=2):
 			pass
+		
 		delta = time() - start
 		assert 1.9 < delta < 2.1  # Small fudge factor.
 	
@@ -99,19 +103,23 @@ class TestCappedQueries(object):
 		count = 0
 		seen = None
 		for record in Log.objects.tail(timeout=0.5):
-			# Make sure after we pause that we continue from where we left off.
-			if count == 100:
-				assert record.id > seen
-			
 			count += 1
+			seen = record.id
 			
 			# This will put quite the kink in our query.
 			# Specifically, the original query will have timed out and a new one
 			# will have to be generated.
 			if count == 100:
-				sleep(2)
-				seen = record.id
-			
+				sleep(1)
+				
+				# Records are pooled in batches, so even after the query is timed out we may still
+				# recieve additional records before the pool drains and the cursor needs to pull
+				# more data from the server.  To avoid weird test failures, we break early here.
+				# Symptoms show up as this test failing with "204 != 200" in the final count.
+				break
+		
+		for record in Log.objects(id__gt=seen).tail(timeout=0.5):
+			count += 1
 			if record.message == 'last': break
 		
 		assert Log.objects.count() == 100
