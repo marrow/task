@@ -5,7 +5,7 @@ from __future__ import unicode_literals
 from os import getpid, getppid
 from socket import gethostname, gethostbyname
 
-from mongoengine import EmbeddedDocument, StringField, IntField, ListField, DynamicField
+from mongoengine import EmbeddedDocument, StringField, IntField, ListField, DictField, DynamicField
 
 from ..compat import py2, unicode
 

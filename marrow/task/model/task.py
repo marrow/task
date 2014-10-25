@@ -27,6 +27,11 @@ log_ = getLogger('task.')  #
 
 
 class TaskPrivateMethods(object):
+	"""Methods used internally to provide Task functionality.
+	
+	Split into a separate object (mixin) to aide in testing and to group functionality.
+	"""
+	
 	def acquire(self):
 		"""Attempt to acquire a lock on this task.
 		
@@ -90,6 +95,7 @@ class TaskPrivateMethods(object):
 		return self.reload()
 	
 	def _execute_standard(self, fn):
+		"""Execute a standard function or method."""
 		try:
 			result = fn(*self._args, **self._kwargs)
 		except Exception as e:
