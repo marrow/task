@@ -212,7 +212,7 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 	def __bytes__(self):
 		return unicode(self).encode('unicode_escape')
 	
-	if py2:
+	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
 	

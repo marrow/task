@@ -4,7 +4,7 @@ from __future__ import unicode_literals
 
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField
 
-from ..compat import py2, unicode
+from ..compat import py2, py3, unicode
 from .query import CappedQuerySet
 from .embed import Owner
 
@@ -39,7 +39,7 @@ class Message(Document):
 	def __bytes__(self):
 		return unicode(self).encode('unicode_escape')
 	
-	if py2:
+	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
 
@@ -67,8 +67,11 @@ class TaskMessage(Message):
 		
 		return super(TaskMessage, self).__repr__('task={0.task.id}'.format(self))
 	
-	if py2:  # pragma: no cover
-		__unicode__ = __str__
+	def __unicode__(self):
+		return "{0.__class__.__name__}".format(self)
+	
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
 
 
 class TaskAdded(TaskMessage):
@@ -93,6 +96,11 @@ class TaskProgress(TaskMessage):
 	def percentage(self):
 		return self.current * 1.0 / self.total
 	
+	def __repr__(self, inner=None):
+		pct = "{0:.0%}%".format(self.percentage) if self.total else "N/A"
+		msg = '"{0}"'.format(self.message.format(**self.replacements)) if self.message else "None"
+		return super(TaskProgress, self).__repr__('{0.current}/{0.total}, {1}, message={2}'.format(self, pct, msg))
+	
 	def __unicode__(self):
 		if self.message:
 			return self.message.format(**self.replacements)
@@ -102,13 +110,8 @@ class TaskProgress(TaskMessage):
 		
 		return "Task indicates progress."
 	
-	def __repr__(self, inner=None):
-		pct = "{0:.0%}%".format(self.percentage) if self.total else "N/A"
-		msg = '"{0}"'.format(self.message.format(**self.replacements)) if self.message else "None"
-		return super(TaskProgress, self).__repr__('{0.current}/{0.total}, {1}, message={2}'.format(self, pct, msg))
-	
-	if py2:  # pragma: no cover
-		__unicode__ = __str__
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
 
 
 class TaskAcquired(TaskMessage):
@@ -117,8 +120,8 @@ class TaskAcquired(TaskMessage):
 	def __unicode__(self):
 		return "Task {0.task.id} locked by PID {0.sender.pid} on host: {0.sender.host}".format(self)
 	
-	if py2:  # pragma: no cover
-		__unicode__ = __str__
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
 
 
 class TaskCancelled(TaskMessage):
@@ -127,8 +130,8 @@ class TaskCancelled(TaskMessage):
 	def __unicode__(self):
 		return "Task {0.task.id} cancelled by PID {0.sender.pid} on host: {0.sender.host}".format(self)
 	
-	if py2:  # pragma: no-cover
-		__unicode__ = __str__
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
 
 
 class TaskRetry(TaskMessage):
@@ -137,8 +140,8 @@ class TaskRetry(TaskMessage):
 	def __unicode__(self):
 		return "Task {0.task.id} scheduled for retry by PID {0.sender.pid} on host: {0.sender.host}".format(self)
 	
-	if py2:  # pragma: no cover
-		__unicode__ = __str__
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
 
 
 class TaskComplete(TaskMessage):
@@ -150,14 +153,14 @@ class TaskComplete(TaskMessage):
 	success = BooleanField(db_field='s', default=True)
 	result = DynamicField(db_field='r')
 	
+	def __repr__(self, inner=None):
+		return super(TaskComplete, self).__repr__('success={0!r}'.format(self.success))
+	
 	def __unicode__(self):
 		if self.success:
 			return "Task {0.task.id} completed successfully.".format(self)
 		
 		return "Task {0.task.id} failed to complete successfully.".format(self)
 	
-	def __repr__(self, inner=None):
-		return super(TaskComplete, self).__repr__('success={0!r}'.format(self.success))
-	
-	if py2:  # pragma: no cover
-		__unicode__ = __str__
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
