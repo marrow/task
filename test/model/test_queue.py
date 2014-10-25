@@ -12,7 +12,7 @@ from marrow.task.model.query import CappedQuerySet
 
 
 class Log(Document):
-	meta = dict(queryset_class=CappedQuerySet, max_documents=100, max_size=2000000)
+	meta = dict(queryset_class=CappedQuerySet, max_documents=10, max_size=1000000)
 	
 	message = StringField()
 	priority = IntField(default=0)
@@ -32,8 +32,11 @@ def pytest_funcarg__message(request):
 
 _PRIORITY = (-2, -1, 0, 1, 2)
 
-def gen_log_entries(count=1000):
-	for i in range(count-1):
+def gen_log_entries(count=100):
+	Log('first').save()  # To avoid immediate exit of the tail.
+	
+	for i in range(count-2):
+		sleep(0.02)  # If we go too fast, the test might not be able to keep up.
 		Log('test #' + str(i) + ' of ' + str(count), choice(_PRIORITY)).save()
 	
 	Log('last').save()
@@ -81,46 +84,49 @@ class TestCappedQueries(object):
 		assert not Log.objects.count()
 		
 		# Start generating entries.
-		Thread(target=gen_log_entries).start()
+		t = Thread(target=gen_log_entries)
+		t.start()
 		
 		count = 0
 		for record in Log.objects.tail():
 			count += 1
 			if record.message == 'last': break
 		
-		# Note that the collection only allows 100 entries...
-		assert Log.objects.count() == 100
+		# Note that the collection only allows 10 entries...
+		assert Log.objects.count() == 10
 		
-		# But we successfully saw all 1000 generated records.  :)
-		assert count == 1000
+		# But we successfully saw all 100 generated records.  :)
+		assert count == 100
+		
+		t.join()
 	
 	def test_intermittent_iteration(self):
 		assert not Log.objects.count()
 		
 		# Start generating entries.
-		Thread(target=gen_log_entries).start()
+		t = Thread(target=gen_log_entries)
+		t.start()
 		
 		count = 0
 		seen = None
-		for record in Log.objects.tail(timeout=0.5):
+		for record in Log.objects.tail(timeout=2):
+			if count == 50:
+				# Records are pooled in batches, so even after the query is timed out-i.e. we take
+				# too long to do something in one of our iterations-we may still recieve additional
+				# records before the pool drains and the cursor needs to pull more data from the
+				# server.  To avoid weird test failures, we break early here.  Symptoms show up as
+				# this test failing with "<semi-random large int> == 200" in the final count.
+				# If you need to worry about this (i.e. having your own retry), track last seen.
+				break
+			
 			count += 1
 			seen = record.id
-			
-			# This will put quite the kink in our query.
-			# Specifically, the original query will have timed out and a new one
-			# will have to be generated.
-			if count == 100:
-				sleep(1)
-				
-				# Records are pooled in batches, so even after the query is timed out we may still
-				# recieve additional records before the pool drains and the cursor needs to pull
-				# more data from the server.  To avoid weird test failures, we break early here.
-				# Symptoms show up as this test failing with "204 != 200" in the final count.
-				break
 		
-		for record in Log.objects(id__gt=seen).tail(timeout=0.5):
+		for record in Log.objects(id__gt=seen).tail(timeout=2):
 			count += 1
 			if record.message == 'last': break
 		
-		assert Log.objects.count() == 100
-		assert count == 200  # The rest generated during that one second we paused.
+		t.join()
+		
+		assert Log.objects.count() == 10
+		assert count == 100  # The rest generated during that one second we paused.
