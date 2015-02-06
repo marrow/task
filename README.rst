@@ -150,11 +150,11 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER I
 OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-.. |masterstatus| image:: http://img.shields.io/travis/marrow/marrow.task/master.svg?style=flat
+.. |masterstatus| image:: http://img.shields.io/travis/marrow/task/master.svg?style=flat
     :target: https://travis-ci.org/marrow/marrow.task
     :alt: Release Build Status
 
-.. |developstatus| image:: http://img.shields.io/travis/marrow/marrow.task/develop.svg?style=flat
+.. |developstatus| image:: http://img.shields.io/travis/marrow/task/develop.svg?style=flat
     :target: https://travis-ci.org/marrow/marrow.task
     :alt: Development Build Status
 
@@ -166,15 +166,15 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
     :target: https://pypi.python.org/pypi/marrow.task
     :alt: Downloads per Week
 
-.. |mastercover| image:: http://img.shields.io/coveralls/marrow/marrow.task/master.svg?style=flat
+.. |mastercover| image:: http://img.shields.io/coveralls/marrow/task/master.svg?style=flat
     :target: https://travis-ci.org/marrow/marrow.task
     :alt: Release Test Coverage
 
-.. |developcover| image:: http://img.shields.io/coveralls/marrow/marrow.task/develop.svg?style=flat
+.. |developcover| image:: http://img.shields.io/coveralls/marrow/task/develop.svg?style=flat
     :target: https://travis-ci.org/marrow/marrow.task
     :alt: Development Test Coverage
 
-.. |issuecount| image:: http://img.shields.io/github/issues/marrow/marrow.task.svg?style=flat
+.. |issuecount| image:: http://img.shields.io/github/issues/marrow/task.svg?style=flat
     :target: https://github.com/marrow/marrow.task/issues
     :alt: Github Issues
 
