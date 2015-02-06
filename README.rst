@@ -92,19 +92,19 @@ Additionally, several other components are needed in order to make use of Marrow
     |developstatus| |developcover|
 
 Development takes place on `GitHub <https://github.com/>`_ in the
-`marrow.task <https://github.com/marrow/marrow.task/>`_ project.  Issue tracking, documentation, and downloads
+`marrow.task <https://github.com/marrow/task/>`_ project.  Issue tracking, documentation, and downloads
 are provided there.
 
 Installing the current development version requires `Git <http://git-scm.com/>`_, a distributed source code management
 system.  If you have Git you can run the following to download and *link* the development version into your Python
 runtime::
 
-    git clone https://github.com/marrow/marrow.task.git
-    (cd marrow.task; python setup.py develop)
+    git clone https://github.com/marrow/task.git
+    (cd task; python setup.py develop)
 
 You can then upgrade to the latest version at any time::
 
-    (cd marrow.task; git pull; python setup.py develop)
+    (cd task; git pull; python setup.py develop)
 
 If you would like to make changes and contribute them back to the project, fork the GitHub project, make your changes,
 and submit a pull request.  This process is beyond the scope of this documentation; for more information see
@@ -151,11 +151,11 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 
 
 .. |masterstatus| image:: http://img.shields.io/travis/marrow/task/master.svg?style=flat
-    :target: https://travis-ci.org/marrow/marrow.task
+    :target: https://travis-ci.org/marrow/task
     :alt: Release Build Status
 
 .. |developstatus| image:: http://img.shields.io/travis/marrow/task/develop.svg?style=flat
-    :target: https://travis-ci.org/marrow/marrow.task
+    :target: https://travis-ci.org/marrow/task
     :alt: Development Build Status
 
 .. |latestversion| image:: http://img.shields.io/pypi/v/marrow.task.svg?style=flat
@@ -167,15 +167,15 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
     :alt: Downloads per Week
 
 .. |mastercover| image:: http://img.shields.io/coveralls/marrow/task/master.svg?style=flat
-    :target: https://travis-ci.org/marrow/marrow.task
+    :target: https://travis-ci.org/marrow/task
     :alt: Release Test Coverage
 
 .. |developcover| image:: http://img.shields.io/coveralls/marrow/task/develop.svg?style=flat
-    :target: https://travis-ci.org/marrow/marrow.task
+    :target: https://travis-ci.org/marrow/task
     :alt: Development Test Coverage
 
 .. |issuecount| image:: http://img.shields.io/github/issues/marrow/task.svg?style=flat
-    :target: https://github.com/marrow/marrow.task/issues
+    :target: https://github.com/marrow/task/issues
     :alt: Github Issues
 
 .. |cake| image:: http://img.shields.io/badge/cake-lie-1b87fb.svg?style=flat
