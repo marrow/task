@@ -1,10 +1,14 @@
 # encoding: utf-8
 
-import os
+import pytest
+import mongoengine
 
-class Mine(object):
-	def canary(self):
-		pass
+from functools import partial
 
-if not hasattr(Mine.canary, 'im_class') and not hasattr(Mine.canary, '__qualname__'):
-	os.environ['CANARY'] = "DEAD"
+
+@pytest.fixture(scope="function", autouse=True)
+def connection(request):
+	"""Automatically connect before testing and discard data after testing."""
+	connection = mongoengine.connect('testing')
+	request.addfinalizer(partial(connection.drop_database, 'testing'))
+	return connection

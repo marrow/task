@@ -9,7 +9,7 @@ from threading import Thread
 from mongoengine import Document, StringField, IntField
 
 from marrow.task.compat import str, unicode
-from marrow.task.model.embed import Owner, Retry, Progress
+from marrow.task.structure import Owner, Retry, Progress
 
 
 

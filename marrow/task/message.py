@@ -4,9 +4,9 @@ from __future__ import unicode_literals
 
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField
 
-from ..compat import py2, py3, unicode
-from .query import CappedQuerySet
-from .embed import Owner
+from .compat import py2, py3, unicode
+from .queryset import CappedQuerySet
+from .structure import Owner
 
 
 class Message(Document):

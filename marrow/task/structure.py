@@ -5,9 +5,9 @@ from __future__ import unicode_literals
 from os import getpid, getppid
 from socket import gethostname, gethostbyname
 
-from mongoengine import EmbeddedDocument, StringField, IntField, ListField, DictField, DynamicField
+from mongoengine import EmbeddedDocument, EmbeddedDocumentField, StringField, IntField, ListField, DictField, DynamicField
 
-from ..compat import py2, unicode
+from .compat import py2, unicode
 
 
 class Owner(EmbeddedDocument):
@@ -111,7 +111,7 @@ class TaskError(EmbeddedDocument):
 	
 	frame = DynamicField(db_field='f')
 	line = IntField(db_field='l')
-	next = EmbeddedDocumentField('TaskError', db_field='n')
+	next = EmbeddedDocumentField('self', db_field='n')
 	
 	def reraise(self):
 		pass

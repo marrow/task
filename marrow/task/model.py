@@ -8,12 +8,12 @@ from pytz import utc
 from datetime import datetime
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField
 from marrow.package.canonical import name
-from marrow.pacakge.loader import load
+from marrow.package.loader import load
 
-from ..compat import py2, unicode
-from ..exc import AcquireFailed
-from .query import TaskQuerySet
-from .embed import Owner, Retry, Progress
+from .compat import py2, unicode
+from .exc import AcquireFailed
+from .queryset import TaskQuerySet
+from .structure import Owner, Retry, Progress
 from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled
 
 

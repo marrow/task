@@ -8,7 +8,7 @@ from random import choice
 from threading import Thread
 from mongoengine import Document, StringField, IntField
 
-from marrow.task.model.query import CappedQuerySet
+from marrow.task.queryset import CappedQuerySet
 
 
 class Log(Document):
