@@ -75,7 +75,7 @@ setup(
 	include_package_data = True,
 	namespace_packages = ['marrow'],
 	
-	install_requires = ['mongoengine', 'pytz', 'marrow.package<2.0'],
+	install_requires = ['mongoengine', 'pytz', 'marrow.package<2.0', 'wrapt<2.0'],
 	
 	extras_require = dict(
 			development = tests_require,

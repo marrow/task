@@ -2,7 +2,8 @@
 
 from __future__ import unicode_literals
 
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField
+from datetime import datetime
+from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
 
 from .compat import py2, py3, unicode
 from .queryset import CappedQuerySet
@@ -14,18 +15,15 @@ class Message(Document):
 	
 	meta = dict(
 			collection = 'TaskQueue',
-			max_documents = 1000,
-			max_size = 10 * 1000 * 1000,
+			max_documents = 65535,
+			max_size = 100 * 1024 * 1024,
 			queryset_class = CappedQuerySet,
 			allow_inheritance = True,
 			# abstract = True  # While technically abstract, we'd still like to query the base class.
 		)
 	
 	sender = EmbeddedDocumentField(Owner, db_field='s', default=Owner.identity)
-	
-	@property
-	def created(self):
-		return self._id.generation_time
+	created = DateTimeField(db_field='w', default=datetime.utcnow)
 	
 	def __repr__(self, inner=None):
 		if inner:
@@ -124,16 +122,6 @@ class TaskAcquired(TaskMessage):
 		__str__ = __unicode__
 
 
-class TaskCancelled(TaskMessage):
-	"""Indicate that a task has been cancelled."""
-	
-	def __unicode__(self):
-		return "Task {0.task.id} cancelled by PID {0.sender.pid} on host: {0.sender.host}".format(self)
-	
-	if py3:  # pragma: no cover
-		__str__ = __unicode__
-
-
 class TaskRetry(TaskMessage):
 	"""Indicates the given task has been rescheduled."""
 	
@@ -144,7 +132,22 @@ class TaskRetry(TaskMessage):
 		__str__ = __unicode__
 
 
-class TaskComplete(TaskMessage):
+class TaskFinished(TaskMessage):
+	"""Common parent class for cancellation or completion."""
+	pass
+
+
+class TaskCancelled(TaskFinished):
+	"""Indicate that a task has been cancelled."""
+	
+	def __unicode__(self):
+		return "Task {0.task.id} cancelled by PID {0.sender.pid} on host: {0.sender.host}".format(self)
+	
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
+
+
+class TaskComplete(TaskFinished):
 	"""Indicate completion of a task.
 	
 	You can monitor for completion without caring about the actual result.

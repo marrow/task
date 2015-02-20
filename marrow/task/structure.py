@@ -5,7 +5,7 @@ from __future__ import unicode_literals
 from os import getpid, getppid
 from socket import gethostname, gethostbyname
 
-from mongoengine import EmbeddedDocument, EmbeddedDocumentField, StringField, IntField, ListField, DictField, DynamicField
+from mongoengine import EmbeddedDocument, EmbeddedDocumentField, StringField, IntField, ListField, DictField, DynamicField, DateTimeField
 
 from .compat import py2, unicode
 
@@ -106,7 +106,7 @@ class Progress(EmbeddedDocument):
 		return super(Progress, self).__repr__('{0.current}/{0.total}, {1}, messages={2}'.format(self, pct, len(self.messages)))
 
 
-class TaskError(EmbeddedDocument):
+class Error(EmbeddedDocument):
 	meta = dict(allow_inheritance=False)
 	
 	frame = DynamicField(db_field='f')
@@ -115,3 +115,14 @@ class TaskError(EmbeddedDocument):
 	
 	def reraise(self):
 		pass
+
+
+class Times(EmbeddedDocument):
+	meta = dict(allow_inheritance=False)
+	
+	when = DateTimeField(db_field='s', default=None)
+	acquired = DateTimeField(db_field='a', default=None)
+	executed = DateTimeField(db_field='e', default=None)
+	completed = DateTimeField(db_field='c', default=None)
+	cancelled = DateTimeField(db_field='x', default=None)
+	expires = DateTimeField(db_field='p', default=None)  # After completion we don't want these records sticking around.

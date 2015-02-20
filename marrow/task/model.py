@@ -6,6 +6,7 @@ from logging import getLogger
 from inspect import isclass, ismethod, isgeneratorfunction
 from pytz import utc
 from datetime import datetime
+from bson import ObjectId
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField
 from marrow.package.canonical import name
 from marrow.package.loader import load
@@ -13,7 +14,7 @@ from marrow.package.loader import load
 from .compat import py2, unicode
 from .exc import AcquireFailed
 from .queryset import TaskQuerySet
-from .structure import Owner, Retry, Progress
+from .structure import Owner, Retry, Progress, Times
 from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled
 
 
@@ -164,7 +165,6 @@ class TaskFutureMethods(object):
 	pass
 
 
-
 class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods):
 	"""The definition of a remotely executed task."""
 	
@@ -178,33 +178,27 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 	
 	# These are used to store the relevant private task data in MongoDB.
 	
-	_callable = StringField(db_field='fn', required=True)  # Should actually be a PythonReferenceField.
-	_args = ListField(DynamicField(), db_field='ap', default=list)
-	_kwargs = DictField(db_field='ak', default=dict)
+	callable = StringField(db_field='fn', required=True)  # Should actually be a PythonReferenceField.
+	args = ListField(DynamicField(), db_field='ap', default=list)
+	kwargs = DictField(db_field='ak', default=dict)
 	
-	_exception = DynamicField(db_field='exc', default=None)
-	_result = DynamicField(db_field='res', default=None)
-	_callback = ListField(StringField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
+	exception = DynamicField(db_field='exc', default=None)
+	result = DynamicField(db_field='res', default=None)
+	callback = ListField(StringField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
 	
-	_when = DateTimeField(db_field='ds', default=None)
-	_acquired = DateTimeField(db_field='da', default=None)
-	_executed = DateTimeField(db_field='de', default=None)
-	_completed = DateTimeField(db_field='dc', default=None)
-	_cancelled = DateTimeField(db_field='dx', default=None)
-	_expires = DateTimeField(db_field='dp', default=None)  # After completion we don't want these records sticking around.
-	
-	_creator = EmbeddedDocumentField(Owner, db_field='c', default=Owner.identity)
-	_owner = EmbeddedDocumentField(Owner, db_field='o')
-	_retry = EmbeddedDocumentField(Retry, db_field='r', default=Retry)
-	_progress = EmbeddedDocumentField(Progress, db_field='p', default=Progress)
+	time = EmbeddedDocumentField(Times, db_field='t', default=Times)
+	creator = EmbeddedDocumentField(Owner, db_field='c', default=Owner.identity)
+	owner = EmbeddedDocumentField(Owner, db_field='o')
+	retry = EmbeddedDocumentField(Retry, db_field='r', default=Retry)
+	progress = EmbeddedDocumentField(Progress, db_field='p', default=Progress)
 	
 	# Python Magic Methods
 	
 	def __repr__(self, inner=None):
 		if inner:
-			return '{0.__class__.__name__}({0.id}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.sender, inner)
+			return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.sender, inner)
 	
-		return '{0.__class__.__name__}({0.id}, host={1.host}, pid={1.pid}, ppid={1.ppid})'.format(self, self.sender)
+		return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid})'.format(self, self.sender)
 	
 	def __str__(self):
 		return "{0.__class__.__name__}".format(self)
@@ -346,43 +340,62 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 		"""Signal the worker pool that it should stop processing after currently excuting tasks have completed."""
 		pass
 	
+	# Helper methods.
+	
+	def _signal(self, kind, **kw):
+		message = kind(task=self, **kw)
+		
+		for i in range(3):
+			try:
+				message.save()
+			except:
+				pass
+	
 	# Futures-compatible future API.
 	
-	def cancel(self):
+	@classmethod
+	def cancel(cls, task):
 		"""Cancel the task if possible.
 		
 		Returns True if the task was cancelled, False otherwise.
 		"""
 		
-		log.debug("Attempting to cancel: %r", self)
+		task = ObjectId(getattr(task, '_id', task))
+		
+		log.debug("Attempting to cancel task {0}.".format(task), extra=dict(task=task))
 		
 		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
 		# If the task has already been run (completed or not) it's too late to cancel it.
 		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cencellation.
-		if not Task.objects(id=self.id, executed=None).update(set__cancelled=datetime.utcnow().replace(tzinfo=utc)):
+		if not Task.objects(id=task, executed=None).update(set__cancelled=datetime.utcnow().replace(tzinfo=utc)):
 			return False
 		
-		try:
-			TaskCancelled(task=self).save()
-		except:
-			log.exception("Unable to notify task cancellation: %s", str(self.id))
+		for i in range(3):  # We attempt three times to notify the queue.
+			try:
+				TaskCancelled(task=task).save()
+			except:
+				log.exception("Unable to broadcast cancellation of task {0}.".format(task),
+						extra = dict(task=task, attempt=i + 1))
+			else:
+				break
+		else:
 			return False
 		
-		log.info("task %s cancelled", str(self.id))
+		log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
 		
 		return True
 	
 	def cancelled(self):
 		"""Return Ture if the task has been cancelled."""
-		return bool(Task.objects(id=self.id).cancelled().count())
+		return bool(Task.objects.cancelled(id=self).count())
 	
 	def running(self):
 		"""Return True if the task is currently executing."""
-		return bool(Task.objects(id=self.id).running().count())
+		return bool(Task.objects.running(id=self).count())
 	
 	def done(self):
 		"""Return True if the task was cancelled or finished executing."""
-		return bool(Task.objects(id=self.id).filter(completed__ne=None).count())
+		return bool(Task.objects.finished(id=self).count())
 	
 	def result(self, timeout=None):
 		"""Return the value returned by the call.
@@ -394,17 +407,26 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 		If the task failed (raised an exception internally) than TaskError is raised.
 		"""
 		
-		completed, result, exception = Task.objects(id=self.id).scalar('completed', '_result', '_exception').first()
+		completed, result, exception = Task.objects(id=self).scalar('completed', '_result', '_exception').get()
 		
 		if completed:  # We can exit early, this task was previously completed.
-			if exception: raise Exception(exception)
+			if exception:
+				raise Exception(exception)
+			
 			return result
 		
 		# Otherwise we wait.
-		for event in self.messages.tail(timeout=timeout):
-			pass
-		
-		pass
+		for event in TaskFinished.objects(task=self._task).tail(timeout):
+			if isinstance(event, TaskCancelled):
+				raise CancelledError()
+			
+			if not message.success:
+				raise Exception(message.result)
+			
+			return message.result
+			
+		else:
+			raise TimeoutError()
 	
 	def exception(self, timeout=None):
 		pass

@@ -3,7 +3,7 @@
 from __future__ import print_function, unicode_literals
 
 from time import time
-from mongoengine import QuerySet
+from mongoengine import QuerySet, Q
 
 
 class CappedQuerySet(QuerySet):
@@ -25,7 +25,8 @@ class CappedQuerySet(QuerySet):
 		"""
 		
 		# Process the timeout value, if one is provided.
-		if timeout: timeout = float(timeout)
+		if timeout:
+			end = time() + timeout
 		
 		# Prepare the query and extract often-reused values.
 		q = self.clone()
@@ -38,13 +39,8 @@ class CappedQuerySet(QuerySet):
 		# We track the last seen ID to allow us to efficiently re-query from where we left off.
 		last = None
 		
-		start = time()  # Capture the start time.
-		
 		while True:
 			cursor = collection.find(query, tailable=True, await_data=True, **q._cursor_args)
-			
-			if timeout:
-				start = time()
 			
 			while True:
 				try:
@@ -55,18 +51,12 @@ class CappedQuerySet(QuerySet):
 					
 					record = None
 				
-				if timeout:
-					end = time()
-					
 				if record is not None:
 					yield self._document._from_son(record, _auto_dereference=self._auto_dereference)
 					last = record['_id']
 				
-				if timeout:
-					timeout -= time() - start
-					if timeout <= 0:
-						return
-					start = time()
+				if timeout and time() >= end:
+					return
 			
 			if last:
 				query.update(_id={"$gt": last})
@@ -81,35 +71,39 @@ class TaskQuerySet(QuerySet):
 		Matched states: pending, accepted, running
 		"""
 		
-		return self.clone().filter(completed=None, cancelled=None).filter(*q_objs, **query)
+		return self.clone().filter(time__completed=None, time__cancelled=None).filter(*q_objs, **query)
 	
 	def pending(self, *q_objs, **query):
 		"""Search for tasks that are pending."""
 		
 		# If it's never been acquired, it can't be running or complete.
-		return self.clone().filter(acquired=None, cancelled=None).filter(*q_objs, **query)
+		return self.clone().filter(time__acquired=None, time__cancelled=None).filter(*q_objs, **query)
 	
 	def accepted(self, *q_objs, **query):
 		"""Search for tasks that have been accepted for work, but aren't yet running."""
 		
-		return self.clone().filter(acquired__ne=None, executed=None, cancelled=None).filter(*q_objs, **query)
+		return self.clone().filter(time__acquired__ne=None, time__executed=None, time__cancelled=None).filter(*q_objs, **query)
 	
 	def running(self, *q_objs, **query):
 		"""Search for tasks that are actively running."""
 		
-		return self.clone().filter(executed__ne=None, completed=None, cancelled=None).filter(*q_objs, **query)
+		return self.clone().filter(time__executed__ne=None, time__completed=None, time__cancelled=None).filter(*q_objs, **query)
 	
 	def failed(self, *q_objs, **query):
 		"""Search for tasks that have failed."""
 		
 		return self.clone().filter(exception__ne=None).filter(*q_objs, **query)
 	
+	def finished(self, *q_objs, **query):
+		"""Search for tasks that have finished, successfully or not."""
+		return self.clone().filter(Q(time__cancelled__ne=None) | Q(time__completed__ne=None)).filter(*q_objs, **query)
+	
 	def complete(self, *q_objs, **query):
 		"""Search for tasks that completed successfully."""
 		
-		return self.clone().filter(completed__ne=None, exception=None).filter(*q_objs, **query)
+		return self.clone().finished(time__cancelled=None, time__exception=None).filter(*q_objs, **query)
 	
 	def cancelled(self, *q_objs, **query):
 		"""Search for tasks that were explicitly cancelled."""
 		
-		return self.clone().filter(cancelled__ne=None).filter(*q_objs, **query)
+		return self.clone().filter(time__cancelled__ne=None).filter(*q_objs, **query)
