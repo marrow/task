@@ -53,7 +53,7 @@ class TestCappedQueries(object):
 		result = list(Log.objects.tail(timeout=2))
 		
 		delta = time() - start
-		assert 1.9 < delta < 2.1  # Small fudge factor.
+		assert 1.9 < delta < 5.1  # Fudged due to SERVER-15815
 		
 		assert len(result) == Log.objects.count()
 	
@@ -64,7 +64,7 @@ class TestCappedQueries(object):
 			pass
 		
 		delta = time() - start
-		assert 1.9 < delta < 2.1  # Small fudge factor.
+		assert 1.9 < delta < 5.1  # Fudged due to SERVER-15815
 	
 	def test_capped_trap(self, message):
 		assert Log._get_collection().options().get('capped', False)

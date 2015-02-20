@@ -7,10 +7,11 @@ from inspect import isclass, ismethod, isgeneratorfunction
 from pytz import utc
 from datetime import datetime
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField
+from marrow.package.canonical import name
+from marrow.pacakge.loader import load
 
 from ..compat import py2, unicode
 from ..exc import AcquireFailed
-from ..util import resolve, load
 from .query import TaskQuerySet
 from .embed import Owner, Retry, Progress
 from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled
@@ -134,7 +135,6 @@ class TaskPrivateMethods(object):
 		except Exception as e:
 			log.exception()
 			pass
-		
 		
 		try:
 			fn = load(self._callable)  # TODO: Allow use of entry points.
