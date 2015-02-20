@@ -104,3 +104,14 @@ class Progress(EmbeddedDocument):
 	def __repr__(self, inner=None):
 		pct = "{0:.0%}%".format(self.percentage) if self.maximum else "N/A"
 		return super(Progress, self).__repr__('{0.current}/{0.total}, {1}, messages={2}'.format(self, pct, len(self.messages)))
+
+
+class TaskError(EmbeddedDocument):
+	meta = dict(allow_inheritance=False)
+	
+	frame = DynamicField(db_field='f')
+	line = IntField(db_field='l')
+	next = EmbeddedDocumentField('TaskError', db_field='n')
+	
+	def reraise(self):
+		pass
