@@ -20,6 +20,8 @@ def _execute_callback(callable, task):
 class TaskFuture(Future):
 	""""""
 	
+	__slots__ = ('_task', )
+	
 	def __init__(self, task):
 		self._task = getattr(task, '_id', task)
 	
@@ -50,18 +52,13 @@ class TaskFuture(Future):
 		return Task.cancelled(self._task)
 	
 	def running(self):
-		return Task.running(self._task)
+		return Task.objects.running(self._task)
 	
 	def done(self):
-		return Task.done(self._task)
+		return Task.objects.done(self._task)
 	
 	def add_done_callback(self, fn):
-		Task.on(self._task, 'done')
-		callback = name(fn)
-		self.task.update(add_to_set__callback=callback)
-		
-		if self.done():
-			Task.submit(execute_callback, callback, self._task)
+		Task.on(self._task, 'done', fn)
 	
 	def result(self, timeout=None):
 		return Task.result(self._task, timeout)

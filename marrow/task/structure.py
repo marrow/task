@@ -4,6 +4,8 @@ from __future__ import unicode_literals
 
 from os import getpid, getppid
 from socket import gethostname, gethostbyname
+from datetime import datetime
+from pytz import utc
 
 from mongoengine import EmbeddedDocument, EmbeddedDocumentField, StringField, IntField, ListField, DictField, DynamicField, DateTimeField
 
@@ -120,7 +122,12 @@ class Error(EmbeddedDocument):
 class Times(EmbeddedDocument):
 	meta = dict(allow_inheritance=False)
 	
-	when = DateTimeField(db_field='s', default=None)
+	EPOCH = datetime(2000, 1, 1, 0, 0, 0, tzinfo=utc)  # We store TimeDeltas as an offset from this.
+	
+	created = DateTimeField(db_field='i', default=lambda: datetime.utcnow().replace(tzinfo=utc))
+	scheduled = DateTimeField(db_field='s', default=None)
+	frequency = DateTimeField(db_field='f', default=None)  # As offset from EPOCH.
+	until = DateTimeField(db_field='u', default=None)  # For use with repeating tasks.
 	acquired = DateTimeField(db_field='a', default=None)
 	executed = DateTimeField(db_field='e', default=None)
 	completed = DateTimeField(db_field='c', default=None)

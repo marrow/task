@@ -5,7 +5,7 @@
 To use these, be sure to start an interactive shell and import the module.
 """
 
-from __future__ import print_function
+from __future__ import unicode_literals, print_function
 
 
 from marrow.task import task, Task
@@ -13,24 +13,56 @@ from marrow.task import task, Task
 
 @task
 def hello(name):
-	return "Hello, " + name + " I'm " + hello.context.id
+	return "Hello, " + name + " I'm " + (hello.context.id or 'running locally')
 
 
+def mul(x, y):
+	return x * y
+
+
+@task(defer=True)  # Defer execution by default.
 def farewell(name):
 	return "Farewell " + name + "."
 
 
-class Phrases(Task):
-	def hello(self, name):
-		print("Hello, ", name, ".", sep="")
-
-	def farewell(self, name):
-		print("Farewell ", name, ".", sep="")
+@task(defer=True)  # Defer execution by default.
+def count(n):
+	for i in range(n):
+		yield n
 
 
 def run():
+	hello("world").result
+	str(hello("world"))
+	hello.call("world")
+	hello.defer("world").result
+	
+	mul(2, 4)
+	Task.submit(mul, 2, 4).result
+	
+	
+	
+	
+	# Run the task immediately in the current thread.  The result will be available right away.
+	farewell.call("world")
+	
+	list(count.call(10))  # Don't want to leave it hanging...
+	
+	
+	# Schedule the task to execute in the background.
+	
+	farewell("world")
+	Task.submit(mul, 2, 4)
+	count(10)
+	
+	
+	
+	
+	
+	
+	
 	# Runs immediately in the current thread.
-	# The result will always be available right away.
+	# The result will be available right away, if you prefer to always defer, pass defer=True to @task.
 	print(hello("world").result)
 
 	# The above is the same, by default, as: hello.call("world")

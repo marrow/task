@@ -78,6 +78,12 @@ class TaskAdded(TaskMessage):
 	pass  # No additional data is required.
 
 
+class TaskScheduled(TaskAdded):
+	"""A scheduled task has been added to the queue."""
+	
+	when = DateTimeField(db_field='w')
+
+
 class TaskProgress(TaskMessage):
 	"""A record broadcast back out to indicate progress on a task.
 	
