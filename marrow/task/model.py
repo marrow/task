@@ -29,7 +29,7 @@ log_ = getLogger('task.')  #
 
 
 
-class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods):
+class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
 	"""The definition of a remotely executed task."""
 	
 	meta = dict(
@@ -67,15 +67,47 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 	
 		return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid})'.format(self, self.sender)
 	
+	# Python Magic Methods - These will block on task completion.
+	
 	def __str__(self):
-		return "{0.__class__.__name__}".format(self)
+		"""Get the unicode string result of this task."""
+		self.wait()  # Doesn't block if already completed.
+		return unicode(self.result)
 	
 	def __bytes__(self):
+		"""Get the byte string result of this task."""
 		return unicode(self).encode('unicode_escape')
+	
+	def __int__(self):
+		self.wait()
+		return int(self.result)
+	
+	def __float__(self):
+		self.wait()
+		return float(self.result)
 	
 	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
+	
+	def __iter__(self):
+		"""Iterate the results of a generator task.
+		
+		It is an error condition to attempt to iterate a non-generator task.
+		"""
+		
+		# This does _not_ call self.wait() as we aren't waiting for completion, we're waiting for yielded chunks.
+		
+		# If the task is already complete, return iter(self.result)
+		
+		# Stream the results out of the message queue.
+		
+		return None
+	
+	def next(self, timeout=None):
+		pass  # TODO
+	
+	__next__ = next
 	
 	# Marrow Task API
 	
@@ -89,19 +121,19 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 	def state(self):
 		"""Return a token indicating the current state of the task."""
 		
-		if self._cancelled:
+		if self.time.cancelled:
 			return 'cancelled'
 		
-		if self._completed:
-			if self._exception:
+		if self.time.completed:
+			if self.exception:
 				return 'failed'
 			
 			return 'complete'
 		
-		if self._executed:
+		if self.time.executed:
 			return 'running'
 		
-		if self._acquired:
+		if self.time.acquired:
 			return 'acquired'
 		
 		return 'pending'
@@ -298,12 +330,3 @@ class Task(Document, TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods)
 	
 	def add_done_callback(self, fn):
 		Task.objects(id=self.id).update()
-	
-	# Futures extension for support of generators.
-	def __iter__(self):
-		return self
-	
-	def next(self, timeout=None):
-		pass  # TODO
-	
-	__next__ = next
