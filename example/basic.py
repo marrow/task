@@ -61,22 +61,22 @@ def run():
 	hello.call(None, "world")  # Keyword arguments would work, too.
 	
 	# Explicitly deferring, well, defers.  Returns a Task instance for this task.
-	task = hello.defer("world")
+	receipt = hello.defer("world")
 	
 	# There are several things you can do with a task instance:
-	task.wait()  # Wait forever for completion (of any kind).
-	task.wait(30)  # Wait 30 seconds.
+	receipt.wait()  # Wait forever for completion (of any kind).
+	receipt.wait(30)  # Wait 30 seconds.
 	
 	# The completion messages contain the results, so waiting will update the local task instance with the result
 	# or exception as appropriate, plus the waiting/running/completed/successful/failed times and thus booleans.
 	
-	task.waiting  # True if the task hasn't been picked up by a worker yet.
-	task.running  # True if the task is still processing.
-	task.completed  # True if the task has finished.
-	task.successful  # True if the task exited cleanly.
-	task.failed  # True if there was an exception raised.
+	receipt.waiting  # True if the task hasn't been picked up by a worker yet.
+	receipt.running  # True if the task is still processing.
+	receipt.completed  # True if the task has finished.
+	receipt.successful  # True if the task exited cleanly.
+	receipt.failed  # True if there was an exception raised.
 	
-	print(task.result)  # Finally emit the result. If not finished, wait forever for the result.
+	print(receipt.result)  # Finally emit the result. If not finished, wait forever for the result.
 	
 	# If there was an exception, attempting to get task.result would explode. The resulting explosion will be the
 	# original exception and traceback, on Python 3 with one of those "while processing X exception, this other one
@@ -84,7 +84,7 @@ def run():
 	
 	# This would also contain the exception details: exception class, arguments, and traceback representation.
 	# (This lets the exception instance itself be recreated.)
-	task.exception
+	receipt.exception
 	
 	# Scheduled deferring.  Returns a Task instance for this task.
 	# Exact datetime.  Timezone aware, naive assumed to be UTC.
@@ -107,26 +107,26 @@ def run():
 	task(mul).after(timedelta(seconds=30), 2, 12)
 	
 	# Deferred generators work, too.
-	task = count(10)
+	receipt = count(10)
 	
 	# Register a callback; if the task is already finished, submit the callback with a DBRef to the task as the
 	# argument.  DBRef arguments to submitted tasks are dereferenced automatically prior to calling the task.
-	task.add_callback(emit)
+	receipt.add_callback(emit)
 	
 	
 	# There are some useful helpers:
 	
-	task = hello.defer("world")
-	str(task)  # wait forever to get the result, then str() it
-	int(task)  # same
-	float(task)  # same
-	bytes(task)  # same (though Python 2 compatibility means str()/unicode() differs slightly)
+	receipt = hello.defer("world")
+	str(receipt)  # wait forever to get the result, then str() it
+	int(receipt)  # same
+	float(receipt)  # same
+	bytes(receipt)  # same (though Python 2 compatibility means str()/unicode() differs slightly)
 	
-	task = count(10)
-	list(task)  # same, piggy-backs on iteration
+	receipt = count(10)
+	list(receipt)  # same, piggy-backs on iteration
 	
 	# as long as the capped collection is large enough, reiteration should be A-OK
-	for i in task:
+	for i in receipt:
 		pass  # same, but progressively, as each yield is issued by the task
 	
 	# You can even use arbitrary dot-colon function references.
