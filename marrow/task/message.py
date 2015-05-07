@@ -159,7 +159,7 @@ class TaskComplete(TaskFinished):
 	You can monitor for completion without caring about the actual result.
 	"""
 	
-	success = BooleanField(db_field='s', default=True)
+	success = BooleanField(db_field='su', default=True)
 	result = DynamicField(db_field='r')
 	
 	def __repr__(self, inner=None):

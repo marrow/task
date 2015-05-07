@@ -6,6 +6,7 @@ from inspect import isgeneratorfunction
 from wrapt import decorator
 from datetime import datetime
 from pytz import utc
+import threading
 
 from mongoengine import Document
 
@@ -13,6 +14,7 @@ from marrow.package.canonical import name
 
 from .mock import LocalTask
 from .model import Task
+from .message import TaskAdded, TaskScheduled
 
 
 def _absolute_time(dt):
@@ -29,11 +31,12 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
 		if not defer:
-			return LocalTask(wrapped, args, kwargs)
+			# return LocalTask(wrapped, args, kwargs)
+			return wrapped(*args, **kwargs)
 		
 		task = Task(callable=name(wrapped))
 		task.generator = generator
-		
+
 		# Allow calling bound methods of Document sub-classes.
 		if isinstance(instance, Document):
 			# TODO: Check that this instance has a pk and has been saved!
@@ -57,15 +60,18 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 			except IndexError:
 				raise TypeError("Must supply a datetime or timedelta schedule as first argument.")
 			args = args[1:]
-		
+
+		task.args = args
 		task.save()
-		
+
 		if task.time.scheduled:
 			task.signal(TaskScheduled, when=task.time.scheduled)
 		else:
 			task.signal(TaskAdded)
+
+		return task
 	
-	return _decorate_inner
+	return _decorate_task_inner
 
 
 def task(_fn=None, defer=False):
@@ -88,6 +94,6 @@ def task(_fn=None, defer=False):
 		return deferred if defer else immediate
 	
 	if _fn:
-		return decorate_task(fn)
+		return decorate_task(_fn)
 	
 	return decorate_task

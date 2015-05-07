@@ -2,12 +2,13 @@
 
 from __future__ import unicode_literals
 
+import pickle
 from logging import getLogger
 from inspect import isclass, ismethod, isgeneratorfunction
 from pytz import utc
 from datetime import datetime
 from bson import ObjectId
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField
+from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
 from marrow.package.canonical import name
 from marrow.package.loader import load
 
@@ -15,7 +16,7 @@ from .compat import py2, unicode
 from .exc import AcquireFailed
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled
+from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete
 from .methods import TaskPrivateMethods
 
 
@@ -27,6 +28,13 @@ log_exc = getLogger('task.execute')  # Task execution notices.
 log_ = getLogger('task.')  #
 log_ = getLogger('task.')  #
 
+
+def encode(obj):
+	return pickle.dumps(obj).encode('ascii')
+
+
+def decode(string):
+	return pickle.loads(string.decode('ascii'))
 
 
 class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
@@ -49,8 +57,8 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	reference = GenericReferenceField(db_field='ref', default=None)
 	generator = BooleanField(db_field='gen', default=False)
 	
-	exception = DynamicField(db_field='exc', default=None)
-	result = DynamicField(db_field='res', default=None)
+	task_exception = DynamicField(db_field='exc', default=None)
+	task_result = DynamicField(db_field='res', default=None)
 	callback = ListField(StringField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
 	
 	time = EmbeddedDocumentField(Times, db_field='t', default=Times)
@@ -63,10 +71,10 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	
 	def __repr__(self, inner=None):
 		if inner:
-			return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.sender, inner)
+			return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.creator, inner)
 	
-		return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid})'.format(self, self.sender)
-	
+		return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid})'.format(self, self.creator)
+
 	# Python Magic Methods - These will block on task completion.
 	
 	def __str__(self):
@@ -90,19 +98,19 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		__unicode__ = __str__
 		__str__ = __bytes__
 	
-	def __iter__(self):
-		"""Iterate the results of a generator task.
-		
-		It is an error condition to attempt to iterate a non-generator task.
-		"""
-		
-		# This does _not_ call self.wait() as we aren't waiting for completion, we're waiting for yielded chunks.
-		
-		# If the task is already complete, return iter(self.result)
-		
-		# Stream the results out of the message queue.
-		
-		return None
+	# def __iter__(self):
+	# 	"""Iterate the results of a generator task.
+	#
+	# 	It is an error condition to attempt to iterate a non-generator task.
+	# 	"""
+	#
+	# 	# This does _not_ call self.wait() as we aren't waiting for completion, we're waiting for yielded chunks.
+	#
+	# 	# If the task is already complete, return iter(self.result)
+	#
+	# 	# Stream the results out of the message queue.
+	#
+	# 	return None
 	
 	def next(self, timeout=None):
 		pass  # TODO
@@ -162,7 +170,48 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		data['completed'] = (self._executed - self._completed) if self._completed else None
 		
 		return data
-	
+
+	@property
+	def result(self):
+		self.reload()
+		return self.task_result
+
+	@property
+	def exception(self):
+		self.reload()
+		exc = self.task_exception
+		return decode(exc['type']), decode(exc['exception']), exc['traceback']
+
+	def handle(self):
+		if self.time.completed:
+			return self.task_result
+
+		try:
+			func = load(self.callable)
+		except ImportError:
+			raise
+
+		import threading
+		ctx = threading.local()
+		ctx.id = self.id
+		print('B', str(self.id)[-6:], ctx.__dict__, id(ctx), threading.current_thread().name)
+		func.context = ctx
+
+		result = None
+		try:
+			result = func(*self.args, **self.kwargs)
+		except Exception as exception:
+			print('E', str(self.id)[-6:], func.context.__dict__, id(func.context), threading.current_thread().name)
+			self.set_exception(exception)
+		else:
+			self.set_result(result)
+		# self.task_result, self.task_exception = result.result, self.set_exception(result.exception)
+
+		self.save()
+		return result
+
+	def wait(self, timeout=None):
+		pass
 	
 	
 	
@@ -174,12 +223,25 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		pass
 	
 	def set_result(self, result):
-		pass
+		self.task_result = result
+		self.save()
 	
 	def set_exception(self, exception):
+		import sys, traceback
+
+		if exception is None:
+			return
+
 		typ, value, tb = sys.exc_info()
+		# import ipdb; ipdb.set_trace()
 		tb = tb.tb_next
 		tb = ''.join(traceback.format_exception(typ, value, tb))
+		self.task_exception = dict(
+			type = encode(typ),
+			exception = encode(value),
+			traceback = tb
+		)
+		self.save()
 	
 	# Futures-compatible executor API.
 	
@@ -238,9 +300,11 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		pass
 	
 	# Helper methods.
+	def signal(self, kind, **kwargs):
+		return self._signal(kind, **kwargs)
 	
 	def _signal(self, kind, **kw):
-		message = kind(task=self, **kw)
+		message = kind(task=self, sender=self.creator, **kw)
 		
 		for i in range(3):
 			try:
@@ -294,39 +358,40 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		"""Return True if the task was cancelled or finished executing."""
 		return bool(Task.objects.finished(id=self).count())
 	
-	def result(self, timeout=None):
-		"""Return the value returned by the call.
-		
-		If the task has not completed yet, wait up to `timeout` seconds, or forever if `timeout` is None.
-		
-		On timeout, TimeoutError is raised.  If the task is cancelled, CancelledError is raised.
-		
-		If the task failed (raised an exception internally) than TaskError is raised.
-		"""
-		
-		completed, result, exception = Task.objects(id=self).scalar('completed', '_result', '_exception').get()
-		
-		if completed:  # We can exit early, this task was previously completed.
-			if exception:
-				raise Exception(exception)
-			
-			return result
-		
-		# Otherwise we wait.
-		for event in TaskFinished.objects(task=self._task).tail(timeout):
-			if isinstance(event, TaskCancelled):
-				raise CancelledError()
-			
-			if not message.success:
-				raise Exception(message.result)
-			
-			return message.result
-			
-		else:
-			raise TimeoutError()
+	# def result(self, timeout=None):
+	# 	"""Return the value returned by the call.
+	#
+	# 	If the task has not completed yet, wait up to `timeout` seconds, or forever if `timeout` is None.
+	#
+	# 	On timeout, TimeoutError is raised.  If the task is cancelled, CancelledError is raised.
+	#
+	# 	If the task failed (raised an exception internally) than TaskError is raised.
+	# 	"""
+	#
+	# 	# completed, result, exception = Task.objects(id=self).scalar('completed', 'task_result', 'task_exception').get()
+	# 	self.reload()
+	#
+	# 	if self.time.completed:  # We can exit early, this task was previously completed.
+	# 		if self.task_exception:
+	# 			raise Exception(self.task_exception)
+	#
+	# 		return self.task_result
+	#
+	# 	# Otherwise we wait.
+	# 	for event in TaskFinished.objects(task=self._task).tail(timeout):
+	# 		if isinstance(event, TaskCancelled):
+	# 			raise CancelledError()
+	#
+	# 		if not message.success:
+	# 			raise Exception(message.result)
+	#
+	# 		return message.result
+	#
+	# 	else:
+	# 		raise TimeoutError()
 	
-	def exception(self, timeout=None):
-		pass
+	# def exception(self, timeout=None):
+	# 	pass
 	
 	def add_done_callback(self, fn):
 		Task.objects(id=self.id).update()

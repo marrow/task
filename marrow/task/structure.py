@@ -105,7 +105,7 @@ class Progress(EmbeddedDocument):
 	
 	def __repr__(self, inner=None):
 		pct = "{0:.0%}%".format(self.percentage) if self.maximum else "N/A"
-		return super(Progress, self).__repr__('{0.current}/{0.total}, {1}, messages={2}'.format(self, pct, len(self.messages)))
+		return 'Progress({0.current}/{0.maximum}, {1}, messages={2})'.format(self, pct, len(self.messages))
 
 
 class Error(EmbeddedDocument):

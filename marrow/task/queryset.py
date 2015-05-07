@@ -7,7 +7,7 @@ from mongoengine import QuerySet, Q
 
 
 class CappedQuerySet(QuerySet):
-	"""A cusom queryset that allows for tailing of capped collections."""
+	"""A custom queryset that allows for tailing of capped collections."""
 	
 	def tail(self, timeout=None):
 		"""A generator which will block and yield entries as they are added to the collection.
@@ -63,7 +63,7 @@ class CappedQuerySet(QuerySet):
 
 
 class TaskQuerySet(QuerySet):
-	"""A cusom queryset bundling common Task queries."""
+	"""A custom queryset bundling common Task queries."""
 	
 	def incomplete(self, *q_objs, **query):
 		"""Search for tasks that aren't yet completed.
