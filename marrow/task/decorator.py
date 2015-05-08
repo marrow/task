@@ -30,6 +30,9 @@ def _absolute_time(dt):
 def _decorate_task(defer=False, generator=False, scheduled=False, repeating=False):
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
+		if not hasattr(wrapped, 'context'):
+			wrapped.context = threading.local()
+
 		if not defer:
 			# return LocalTask(wrapped, args, kwargs)
 			return wrapped(*args, **kwargs)
@@ -51,7 +54,7 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 			args = args[1:]
 			
 			task.time.scheduled = _absolute_time(kwargs.pop('starts', None))
-			task.tike.until = _absolute_time(kwargs.pop('ends', None))
+			task.time.until = _absolute_time(kwargs.pop('ends', None))
 		
 		# Or a fn.at() call...
 		elif scheduled:

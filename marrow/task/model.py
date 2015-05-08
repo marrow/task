@@ -191,21 +191,16 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		except ImportError:
 			raise
 
-		import threading
-		ctx = threading.local()
+		ctx = func.context
 		ctx.id = self.id
-		print('B', str(self.id)[-6:], ctx.__dict__, id(ctx), threading.current_thread().name)
-		func.context = ctx
 
 		result = None
 		try:
 			result = func(*self.args, **self.kwargs)
 		except Exception as exception:
-			print('E', str(self.id)[-6:], func.context.__dict__, id(func.context), threading.current_thread().name)
 			self.set_exception(exception)
 		else:
 			self.set_result(result)
-		# self.task_result, self.task_exception = result.result, self.set_exception(result.exception)
 
 		self.save()
 		return result
