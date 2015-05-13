@@ -30,8 +30,9 @@ def _absolute_time(dt):
 def _decorate_task(defer=False, generator=False, scheduled=False, repeating=False):
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
-		if not hasattr(wrapped, 'context'):
-			wrapped.context = threading.local()
+		# if not hasattr(wrapped, 'context'):
+		# # print('DECORATOR called')
+		# 	wrapped.context = threading.local()
 
 		if not defer:
 			# return LocalTask(wrapped, args, kwargs)
@@ -82,7 +83,7 @@ def task(_fn=None, defer=False):
 	
 	By default calling the function will return a mock Task which will lazily execute the target callable the first
 	time its result is requested, in the thread that requested it.  You can change this to executing remotely by
-	defualt by calling the decorator with a truthy value passed via the `defer` keyword argument.  Regardless 
+	default by calling the decorator with a truthy value passed via the `defer` keyword argument.  Regardless
 	"""
 	
 	def decorate_task(fn):

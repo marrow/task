@@ -26,7 +26,6 @@ log_acq = getLogger('task.acquire')  # Task acquisition notices.
 log_rel = getLogger('task.release')  # Task release notices.
 log_exc = getLogger('task.execute')  # Task execution notices.
 log_ = getLogger('task.')  #
-log_ = getLogger('task.')  #
 
 
 def encode(obj):
@@ -180,9 +179,30 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	def exception(self):
 		self.reload()
 		exc = self.task_exception
+		if exc is None:
+			return None
 		return decode(exc['type']), decode(exc['exception']), exc['traceback']
 
+	def get_callable(self):
+		return load(self.callable)
+
+	def acquire(self):
+		result = Task.objects(
+			id = self.id,
+			time__acquired__exists = False,
+		).update(
+			set__time__acquired = datetime.utcnow().replace(tzinfo=utc)
+		)
+
+		if not result:
+			raise AcquireFailed('%r is already acquired.' % self)
+
+		TaskAcquired.objects.create(task=self)
+		return True
+
 	def handle(self):
+		# import threading
+		# print(threading.current_thread())
 		if self.time.completed:
 			return self.task_result
 
@@ -191,8 +211,11 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		except ImportError:
 			raise
 
-		ctx = func.context
-		ctx.id = self.id
+		# if not hasattr(func, 'context'):
+		# 	import threading
+		# 	func.context = threading.local()
+		# ctx = func.context
+		# ctx.id = self.id
 
 		result = None
 		try:
@@ -202,7 +225,12 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		else:
 			self.set_result(result)
 
+		self.time.completed = datetime.utcnow().replace(tzinfo=utc)
+
 		self.save()
+
+		# self.signal(TaskComplete, success=self.exception is None, result=self.exception or self.result)
+
 		return result
 
 	def wait(self, timeout=None):
@@ -236,6 +264,7 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 			exception = encode(value),
 			traceback = tb
 		)
+		self.time.completed = datetime.utcnow().replace(tzinfo=utc)
 		self.save()
 	
 	# Futures-compatible executor API.
@@ -353,37 +382,37 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		"""Return True if the task was cancelled or finished executing."""
 		return bool(Task.objects.finished(id=self).count())
 	
-	# def result(self, timeout=None):
-	# 	"""Return the value returned by the call.
-	#
-	# 	If the task has not completed yet, wait up to `timeout` seconds, or forever if `timeout` is None.
-	#
-	# 	On timeout, TimeoutError is raised.  If the task is cancelled, CancelledError is raised.
-	#
-	# 	If the task failed (raised an exception internally) than TaskError is raised.
-	# 	"""
-	#
-	# 	# completed, result, exception = Task.objects(id=self).scalar('completed', 'task_result', 'task_exception').get()
-	# 	self.reload()
-	#
-	# 	if self.time.completed:  # We can exit early, this task was previously completed.
-	# 		if self.task_exception:
-	# 			raise Exception(self.task_exception)
-	#
-	# 		return self.task_result
-	#
-	# 	# Otherwise we wait.
-	# 	for event in TaskFinished.objects(task=self._task).tail(timeout):
-	# 		if isinstance(event, TaskCancelled):
-	# 			raise CancelledError()
-	#
-	# 		if not message.success:
-	# 			raise Exception(message.result)
-	#
-	# 		return message.result
-	#
-	# 	else:
-	# 		raise TimeoutError()
+	def result_old(self, timeout=None):
+		"""Return the value returned by the call.
+
+		If the task has not completed yet, wait up to `timeout` seconds, or forever if `timeout` is None.
+
+		On timeout, TimeoutError is raised.  If the task is cancelled, CancelledError is raised.
+
+		If the task failed (raised an exception internally) than TaskError is raised.
+		"""
+
+		# completed, result, exception = Task.objects(id=self).scalar('completed', 'task_result', 'task_exception').get()
+		self.reload()
+
+		if self.time.completed:  # We can exit early, this task was previously completed.
+			if self.task_exception:
+				raise Exception(self.task_exception)
+
+			return self.task_result
+
+		# Otherwise we wait.
+		for event in TaskFinished.objects(task=self._task).tail(timeout):
+			if isinstance(event, TaskCancelled):
+				raise CancelledError()
+
+			if not message.success:
+				raise Exception(message.result)
+
+			return message.result
+
+		else:
+			raise TimeoutError()
 	
 	# def exception(self, timeout=None):
 	# 	pass

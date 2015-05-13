@@ -1,0 +1,5 @@
+type: thread
+workers: 3
+database: mtask
+timeout: null
+loglevel: info

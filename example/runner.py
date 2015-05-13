@@ -11,4 +11,4 @@ def run(tidx):
 	task.signal(TaskAcquired)
 	# import ipdb; ipdb.set_trace()
 	task.handle()
-	task.signal(TaskComplete, success=task.exception is None, result=task.result)
+	# task.signal(TaskComplete, success=task.exception is None, result=task.result)

@@ -32,7 +32,7 @@ def hello(name):
 	time.sleep(random.randint(1, 3))
 	# print('End:', threading.current_thread())
 	res =  "Hello, %s I'm %s" % (name, hello.context.id or 'running locally')
-	# print(res)
+	print(res)
 	return res
 
 
