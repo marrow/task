@@ -83,6 +83,13 @@ setup(
 	
 	tests_require = tests_require,
 	
+	entry_points = {
+			'futures.executor': [
+					'thread = concurrent.futures:ThreadPoolExecutor',
+					'process = concurrent.futures:ProcessPoolExecutor',
+				]
+		}
+
 	zip_safe = False,
 	cmdclass = dict(
 			test = PyTest,
