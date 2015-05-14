@@ -9,11 +9,12 @@ from pytz import utc
 from datetime import datetime
 from bson import ObjectId
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
+from wrapt.wrappers import FunctionWrapper
 from marrow.package.canonical import name
 from marrow.package.loader import load
 
 from .compat import py2, unicode
-from .exc import AcquireFailed
+from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
 from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete
@@ -201,8 +202,6 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		return True
 
 	def handle(self):
-		# import threading
-		# print(threading.current_thread())
 		if self.time.completed:
 			return self.task_result
 
@@ -211,14 +210,10 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		except ImportError:
 			raise
 
-		# if not hasattr(func, 'context'):
-		# 	import threading
-		# 	func.context = threading.local()
-		# ctx = func.context
-		# ctx.id = self.id
-
 		result = None
 		try:
+			if isinstance(func, FunctionWrapper):
+				func = func.call
 			result = func(*self.args, **self.kwargs)
 		except Exception as exception:
 			self.set_exception(exception)
@@ -229,16 +224,17 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 
 		self.save()
 
-		# self.signal(TaskComplete, success=self.exception is None, result=self.exception or self.result)
+		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
 
 		return result
 
 	def wait(self, timeout=None):
-		pass
-	
-	
-	
-	
+		for event in TaskComplete.objects(task=self).tail(timeout):
+			break
+		else:
+			raise TimeoutError('%r is timed out.' % self)
+		self.reload()
+
 	
 	# Futures-compatible pseudo-internal API.
 	
@@ -256,7 +252,6 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 			return
 
 		typ, value, tb = sys.exc_info()
-		# import ipdb; ipdb.set_trace()
 		tb = tb.tb_next
 		tb = ''.join(traceback.format_exception(typ, value, tb))
 		self.task_exception = dict(
@@ -264,7 +259,6 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 			exception = encode(value),
 			traceback = tb
 		)
-		self.time.completed = datetime.utcnow().replace(tzinfo=utc)
 		self.save()
 	
 	# Futures-compatible executor API.

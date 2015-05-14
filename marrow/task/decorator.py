@@ -30,14 +30,16 @@ def _absolute_time(dt):
 def _decorate_task(defer=False, generator=False, scheduled=False, repeating=False):
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
-		# if not hasattr(wrapped, 'context'):
 		# # print('DECORATOR called')
-		# 	wrapped.context = threading.local()
 
 		if not defer:
 			# return LocalTask(wrapped, args, kwargs)
+			if not hasattr(wrapped, 'context'):
+				wrapped.context = threading.local()
+				wrapped.context.id = None
+
 			return wrapped(*args, **kwargs)
-		
+
 		task = Task(callable=name(wrapped))
 		task.generator = generator
 
@@ -93,8 +95,7 @@ def task(_fn=None, defer=False):
 		fn.defer = deferred = _decorate_task(True, generator)(fn)
 		fn.at = _decorate_task(True, generator, scheduled=True)(fn)
 		fn.every = _decorate_task(True, generator, repeating=True)(fn)
-		
-		
+
 		return deferred if defer else immediate
 	
 	if _fn:

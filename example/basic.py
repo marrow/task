@@ -24,15 +24,9 @@ def hello(name):
 	#  * task - a lazily-
 	# Execution (immediate, deferred, whatever) provides the ObjectId representing this execution, or None
 	# if running locally.
-	# print(hello)
-	import threading
 	import time
-	import random
-	# print('Begin:', threading.current_thread())
-	time.sleep(random.randint(1, 3))
-	# print('End:', threading.current_thread())
+	time.sleep(10)
 	res =  "Hello, %s I'm %s" % (name, hello.context.id or 'running locally')
-	print(res)
 	return res
 
 

@@ -9,3 +9,7 @@ class AcquireFailed(Exception):
 
 class TaskException(Exception):
 	pass
+
+
+class TimeoutError(Exception):
+	pass

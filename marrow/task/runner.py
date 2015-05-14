@@ -2,6 +2,8 @@
 
 
 import logging
+from functools import partial
+
 from yaml import load
 try:
 	from yaml import CLoader as Loader
@@ -9,7 +11,8 @@ except ImportError:
 	from yaml import Loader
 from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-from marrow.task.message import TaskAdded, TaskAcquired, TaskComplete
+
+from marrow.task.message import TaskAdded
 from marrow.task.exc import AcquireFailed
 
 
@@ -77,19 +80,17 @@ class Runner(object):
 		self.logger.info('Process task %r', task)
 
 		import threading
-		callable = task.get_callable()
-		if not hasattr(callable, 'context'):
-			callable.context = threading.local()
-		callable.context.id = task.id
+		func = task.get_callable()
+		if not hasattr(func, 'context'):
+			func.context = threading.local()
+		func.context.id = task.id
 
 		task.handle()
-		task.signal(TaskComplete, success=task.exception is None, result=task.exception or task.result)
 		self.logger.info('Complete task %r', task)
 
 	def run(self):
 		for event in TaskAdded.objects.tail(timeout=self.timeout):
 			task = event.task
-			self.logger.info('Preprocess task %r', task)
 
 			try:
 				task.acquire()
@@ -98,5 +99,4 @@ class Runner(object):
 				continue
 
 			self.logger.info('Acquire task %r', task)
-			from functools import partial
 			self.executor.submit(partial(self._process_task, task))
