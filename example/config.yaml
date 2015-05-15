@@ -1,5 +1,19 @@
-type: thread
-workers: 3
-database: mtask
-timeout: null
-loglevel: info
+runner:
+  use: thread
+  max_workers: 3
+  timeout: null
+
+database:
+  host: mongodb://localhost/mtask
+
+logging:
+  version: 1
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      stream: ext://sys.stdout
+  loggers:
+    runner:
+      handlers: [console]
+      level: INFO

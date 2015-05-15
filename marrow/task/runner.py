@@ -2,7 +2,9 @@
 
 
 import logging
+import logging.config
 from functools import partial
+from copy import deepcopy
 
 from yaml import load
 try:
@@ -16,37 +18,46 @@ from marrow.task.message import TaskAdded
 from marrow.task.exc import AcquireFailed
 
 
-logging.basicConfig()
+# logging.basicConfig()
+
+
+DEFAULT_CONFIG = dict(
+	runner = dict(
+		timeout = None,
+		use = 'thread',
+		max_workers = 3,
+	),
+	database = dict(
+		host = 'mongodb://localhost/marrowTask',
+	),
+	logging = dict(
+		version = 1,
+	)
+)
 
 
 class Runner(object):
 	def __init__(self, config=None):
-		self._connection = None
-
 		config = self._get_config(config)
 
 		ex_cls = dict(
 			thread = ThreadPoolExecutor,
 			process = ProcessPoolExecutor,
-		)[config['type']]
-		self.executor = ex_cls(max_workers=config['workers'])
+		)[config['runner'].pop('use')]
 
-		self.timeout = config['timeout']
+		self.timeout = config['runner'].pop('timeout')
+		self.executor = ex_cls(**config['runner'])
 
+		self._connection = None
 		self._connect(config['database'])
 
-		self.logger = logging.getLogger('%s:%s' % (__name__, config['loggername']))
-		self.logger.setLevel(getattr(logging, config['loglevel'].upper(), logging.WARNING))
+		logging.config.dictConfig(config['logging'])
+		# Get first logger name from config or class name.
+		logger_name = next(config['logging'].get('loggers', {self.__class__.__name__: None}).iterkeys())
+		self.logger = logging.getLogger(logger_name)
 
 	def _get_config(self, config):
-		base = dict(
-			type = 'thread',
-			workers = 3,
-			database = 'marrowtask',
-			timeout = None,
-			loggername = self.__class__.__name__,
-			loglevel = 'warning',
-		)
+		base = deepcopy(DEFAULT_CONFIG)
 
 		if config is None:
 			return base
@@ -71,10 +82,10 @@ class Runner(object):
 		base.update(data)
 		return base
 
-	def _connect(self, db):
+	def _connect(self, config):
 		if self._connection:
 			return
-		self._connection = connect(db)
+		self._connection = connect(**config)
 
 	def get_context(self, task):
 		return dict(
@@ -85,7 +96,9 @@ class Runner(object):
 		self.logger.info('Process task %r', task)
 
 		func = task.get_callable()
-		func.context.__dict__ = self.get_context(task)
+		context = self.get_context(task)
+		for key, value in context.iteritems():
+			setattr(func.context, key, value)
 
 		task.handle()
 		self.logger.info('Complete task %r', task)
