@@ -76,14 +76,16 @@ class Runner(object):
 			return
 		self._connection = connect(db)
 
+	def get_context(self, task):
+		return dict(
+			id = task.id,
+		)
+
 	def _process_task(self, task):
 		self.logger.info('Process task %r', task)
 
-		import threading
 		func = task.get_callable()
-		if not hasattr(func, 'context'):
-			func.context = threading.local()
-		func.context.id = task.id
+		func.context.__dict__ = self.get_context(task)
 
 		task.handle()
 		self.logger.info('Complete task %r', task)

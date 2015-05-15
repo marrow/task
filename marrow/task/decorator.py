@@ -12,7 +12,6 @@ from mongoengine import Document
 
 from marrow.package.canonical import name
 
-from .mock import LocalTask
 from .model import Task
 from .message import TaskAdded, TaskScheduled
 
@@ -30,14 +29,7 @@ def _absolute_time(dt):
 def _decorate_task(defer=False, generator=False, scheduled=False, repeating=False):
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
-		# # print('DECORATOR called')
-
 		if not defer:
-			# return LocalTask(wrapped, args, kwargs)
-			if not hasattr(wrapped, 'context'):
-				wrapped.context = threading.local()
-				wrapped.context.id = None
-
 			return wrapped(*args, **kwargs)
 
 		task = Task(callable=name(wrapped))
@@ -90,6 +82,10 @@ def task(_fn=None, defer=False):
 	
 	def decorate_task(fn):
 		generator = isgeneratorfunction(fn)
+
+		if not hasattr(fn, 'context'):
+			fn.context = threading.local()
+			fn.context.id = None
 		
 		fn.call = immediate = _decorate_task(False, generator)(fn)
 		fn.defer = deferred = _decorate_task(True, generator)(fn)
