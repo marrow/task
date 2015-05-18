@@ -101,7 +101,7 @@ class TaskQuerySet(QuerySet):
 	def complete(self, *q_objs, **query):
 		"""Search for tasks that completed successfully."""
 		
-		return self.clone().finished(time__cancelled=None, time__exception=None).filter(*q_objs, **query)
+		return self.clone().finished(time__cancelled=None, task_exception=None).filter(*q_objs, **query)
 	
 	def cancelled(self, *q_objs, **query):
 		"""Search for tasks that were explicitly cancelled."""

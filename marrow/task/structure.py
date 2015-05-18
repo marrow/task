@@ -133,3 +133,8 @@ class Times(EmbeddedDocument):
 	completed = DateTimeField(db_field='c', default=None)
 	cancelled = DateTimeField(db_field='x', default=None)
 	expires = DateTimeField(db_field='p', default=None)  # After completion we don't want these records sticking around.
+
+	def __repr__(self):
+		fdt = lambda dt: dt.strftime('%Y-%m-%d %H:%M:%S')
+		text = ', '.join('{0}={1}'.format(key, fdt(value)) for key, value in self._data.iteritems() if value is not None)
+		return 'Times({0})'.format(text)

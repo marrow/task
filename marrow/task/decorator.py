@@ -11,9 +11,11 @@ import threading
 from mongoengine import Document
 
 from marrow.package.canonical import name
+from marrow.package.loader import load
 
 from .model import Task
 from .message import TaskAdded, TaskScheduled
+from .compat import str, unicode
 
 
 def _absolute_time(dt):
@@ -95,6 +97,8 @@ def task(_fn=None, defer=False):
 		return deferred if defer else immediate
 	
 	if _fn:
+		if isinstance(_fn, (str, unicode)):
+			_fn = load(_fn)
 		return decorate_task(_fn)
 	
 	return decorate_task

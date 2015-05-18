@@ -19,6 +19,7 @@ from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
 from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete
 from .methods import TaskPrivateMethods
+from .field import PythonReferenceField
 
 
 log = getLogger(__name__)  # General messages.
@@ -50,7 +51,7 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	
 	# These are used to store the relevant private task data in MongoDB.
 	
-	callable = StringField(db_field='fn', required=True)  # Should actually be a PythonReferenceField.
+	callable = PythonReferenceField(db_field='fn', required=True)  # Should actually be a PythonReferenceField.
 	args = ListField(DynamicField(), db_field='ap', default=list)
 	kwargs = DictField(db_field='ak', default=dict)
 	
@@ -59,7 +60,7 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	
 	task_exception = DynamicField(db_field='exc', default=None)
 	task_result = DynamicField(db_field='res', default=None)
-	callback = ListField(StringField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
+	callback = ListField(PythonReferenceField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
 	
 	time = EmbeddedDocumentField(Times, db_field='t', default=Times)
 	creator = EmbeddedDocumentField(Owner, db_field='c', default=Owner.identity)
@@ -184,9 +185,6 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 			return None
 		return decode(exc['type']), decode(exc['exception']), exc['traceback']
 
-	def get_callable(self):
-		return load(self.callable)
-
 	def acquire(self):
 		result = Task.objects(
 			id = self.id,
@@ -205,11 +203,7 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		if self.time.completed:
 			return self.task_result
 
-		try:
-			func = load(self.callable)
-		except ImportError:
-			raise
-
+		func = self.callable
 		result = None
 		try:
 			if isinstance(func, FunctionWrapper):
@@ -226,7 +220,20 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 
 		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
 
+		from marrow.task import task
+		self.reload('callback', 'time')
+		if self.successful:
+			for callback in self.callback:
+				task(callback).defer(self)
+
 		return result
+
+	def add_callback(self, callback):
+		from marrow.task import task
+		self.callback.append(callback)
+		self.save()
+		if self.completed:
+			task(callback).defer(self)
 
 	def wait(self, timeout=None):
 		for event in TaskComplete.objects(task=self).tail(timeout):
@@ -329,7 +336,7 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 				message.save()
 			except:
 				pass
-	
+
 	# Futures-compatible future API.
 	
 	@classmethod
@@ -363,18 +370,34 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
 		
 		return True
-	
+
+	# Properties
+	@property
+	def waiting(self):
+		return bool(Task.objects.accepted(id=self.id).count())
+
+	@property
 	def cancelled(self):
 		"""Return Ture if the task has been cancelled."""
-		return bool(Task.objects.cancelled(id=self).count())
+		return bool(Task.objects.cancelled(id=self.id).count())
 	
+	@property
 	def running(self):
 		"""Return True if the task is currently executing."""
-		return bool(Task.objects.running(id=self).count())
+		return bool(Task.objects.running(id=self.id).count())
 	
-	def done(self):
+	@property
+	def completed(self):
 		"""Return True if the task was cancelled or finished executing."""
-		return bool(Task.objects.finished(id=self).count())
+		return bool(Task.objects.finished(id=self.id).count())
+
+	@property
+	def successful(self):
+		return bool(Task.objects.complete(id=self.id).count())
+
+	@property
+	def failed(self):
+		return bool(Task.objects.failed(id=self.id).count())
 	
 	def result_old(self, timeout=None):
 		"""Return the value returned by the call.

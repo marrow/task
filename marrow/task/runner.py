@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import TaskAdded
 from marrow.task.exc import AcquireFailed
+from marrow.task.compat import str, unicode
 
 
 # logging.basicConfig()
@@ -95,7 +96,10 @@ class Runner(object):
 	def _process_task(self, task):
 		self.logger.info('Process task %r', task)
 
-		func = task.get_callable()
+		from marrow.task import task as task_decorator
+		func = task.callable
+		if not hasattr(func, 'context'):
+			func = task_decorator(func)
 		context = self.get_context(task)
 		for key, value in context.iteritems():
 			setattr(func.context, key, value)

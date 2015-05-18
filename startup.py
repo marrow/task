@@ -22,7 +22,7 @@ if not Task.objects:
 
 
 t = list(Task.objects)[-1]
-
+a = 42
 runner = Runner('./example/config.yaml')
 
 def test_concurrency():
