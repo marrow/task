@@ -46,7 +46,7 @@ def farewell(name):
 @task(defer=True)
 def count(n):
 	for i in range(n):
-		yield n
+		yield i
 
 
 def emit(task):

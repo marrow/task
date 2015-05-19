@@ -4,7 +4,7 @@ from __future__ import unicode_literals
 
 import pickle
 from logging import getLogger
-from inspect import isclass, ismethod, isgeneratorfunction
+from inspect import isclass, ismethod, isgeneratorfunction, isgenerator
 from pytz import utc
 from datetime import datetime
 from bson import ObjectId
@@ -36,6 +36,33 @@ def encode(obj):
 
 def decode(string):
 	return pickle.loads(string.decode('ascii'))
+
+
+class GeneratorTaskIterator(object):
+	def __init__(self, task, gen):
+		self.task = task
+		self.result = []
+		self.generator = gen
+
+	def __iter__(self):
+		return self
+
+	def next(self):
+		try:
+			item = next(self.generator)
+		except StopIteration:
+			self.task.set_result(self.result)
+			self.task._complete_task()
+			raise
+		except Exception as exception:
+			self.task.set_exception(exception)
+			self.task._complete_task()
+			raise StopIteration()
+		else:
+			self.result.append(item)
+			return item
+
+	__next__ = next
 
 
 class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
@@ -199,6 +226,18 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		TaskAcquired.objects.create(task=self)
 		return True
 
+	def _complete_task(self):
+		self.time.completed = datetime.utcnow().replace(tzinfo=utc)
+		self.save()
+
+		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
+
+		from marrow.task import task
+		self.reload('callback', 'time')
+		if self.successful:
+			for callback in self.callback:
+				task(callback).defer(self)
+
 	def handle(self):
 		if self.time.completed:
 			return self.task_result
@@ -209,22 +248,14 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 			if isinstance(func, FunctionWrapper):
 				func = func.call
 			result = func(*self.args, **self.kwargs)
+			if isgenerator(result):
+				return GeneratorTaskIterator(self, result)
 		except Exception as exception:
 			self.set_exception(exception)
 		else:
 			self.set_result(result)
 
-		self.time.completed = datetime.utcnow().replace(tzinfo=utc)
-
-		self.save()
-
-		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
-
-		from marrow.task import task
-		self.reload('callback', 'time')
-		if self.successful:
-			for callback in self.callback:
-				task(callback).defer(self)
+		self._complete_task()
 
 		return result
 
