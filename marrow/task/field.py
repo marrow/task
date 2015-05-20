@@ -21,3 +21,8 @@ class PythonReferenceField(BaseField):
 	def validate(self, value, clean=True):
 		if not callable(value):
 			self.error('Only callables may be used in a %s' % self.__class__.__name__)
+
+	def prepare_query_value(self, op, value):
+		if not callable(value):
+			return value
+		return name(value)
