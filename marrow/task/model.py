@@ -50,7 +50,10 @@ class GeneratorTaskIterator(object):
 	def next(self):
 		try:
 			item = next(self.generator)
-		except StopIteration:
+		except StopIteration as exception:
+			value = getattr(exception, 'value', None)
+			if value is not None:
+				self.result.append(value)
 			self.task.set_result(self.result)
 			self.task._complete_task()
 			raise
@@ -104,6 +107,30 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid})'.format(self, self.creator)
 
 	# Python Magic Methods - These will block on task completion.
+
+	def __iter__(self):
+		import inspect
+		import os.path
+
+		# __iter__ used in model's save method.
+		# Get caller's file path and if it is not in mongoengine return iterator of task's result.
+		caller_frame = inspect.stack()[1][0]
+		mongoengine_path = os.path.dirname(inspect.getfile(Document))
+		if caller_frame.f_code.co_filename.startswith(mongoengine_path):
+			return super(Task, self).__iter__()
+
+		self.wait()
+		result = self.result
+		if not hasattr(result, '__iter__'):
+			result = [result]
+		return iter(result)
+
+	def as_list(self):
+		self.wait()
+		result = self.result
+		if not hasattr(result, '__iter__'):
+			result = [result]
+		return result
 	
 	def __str__(self):
 		"""Get the unicode string result of this task."""
