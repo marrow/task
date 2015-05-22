@@ -7,6 +7,7 @@ from logging import getLogger
 from inspect import isclass, ismethod, isgeneratorfunction, isgenerator
 from pytz import utc
 from datetime import datetime
+from collections import namedtuple
 from bson import ObjectId
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
 from wrapt.wrappers import FunctionWrapper
@@ -17,7 +18,7 @@ from .compat import py2, unicode
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete
+from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -41,7 +42,6 @@ def decode(string):
 class GeneratorTaskIterator(object):
 	def __init__(self, task, gen):
 		self.task = task
-		self.result = []
 		self.generator = gen
 
 	def __iter__(self):
@@ -50,22 +50,29 @@ class GeneratorTaskIterator(object):
 	def next(self):
 		try:
 			item = next(self.generator)
+
 		except StopIteration as exception:
 			value = getattr(exception, 'value', None)
-			if value is not None:
-				self.result.append(value)
-			self.task.set_result(self.result)
+			self.task.signal(TaskIterated, status=TaskIterated.FINISHED, result=value)
+			result = list(TaskIterated.objects(task=self.task, result__ne=None).scalar('result'))
+			self.task.set_result(result)
 			self.task._complete_task()
 			raise
+
 		except Exception as exception:
-			self.task.set_exception(exception)
+			exc = self.task.set_exception(exception)
+			self.task.signal(TaskIterated, status=TaskIterated.FAILED, result=exc)
 			self.task._complete_task()
 			raise StopIteration()
+
 		else:
-			self.result.append(item)
+			self.task.signal(TaskIterated, status=TaskIterated.NORMAL, result=item)
 			return item
 
 	__next__ = next
+
+
+_ExceptionInfo = namedtuple('_ExceptionInfo', 'type exception traceback')
 
 
 class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
@@ -119,18 +126,37 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		if caller_frame.f_code.co_filename.startswith(mongoengine_path):
 			return super(Task, self).__iter__()
 
-		self.wait()
-		result = self.result
-		if not hasattr(result, '__iter__'):
-			result = [result]
-		return iter(result)
+		return self.result_iterator()
 
-	def as_list(self):
-		self.wait()
-		result = self.result
-		if not hasattr(result, '__iter__'):
-			result = [result]
-		return result
+	def _result_iterator(self):
+		if self.time.completed:
+			for item in self.result:
+				yield item
+			raise StopIteration
+
+		for entry in TaskIterated.objects(task=self).tail():
+			if entry.status == TaskIterated.FINISHED:
+				if entry.result is not None:
+					yield entry.result
+
+				raise StopIteration(value=entry.result)
+
+			elif entry.status == TaskIterated.FAILED:
+				raise self.exception
+
+			if entry.result is None:
+				continue
+
+			yield entry.result
+
+	def result_iterator(self):
+		"""Iterate the results of a generator task.
+
+		It is an error condition to attempt to iterate a non-generator task.
+		"""
+		if not self.generator:
+			raise ValueError('Cannot use on non-generator tasks.')
+		return self._result_iterator()
 	
 	def __str__(self):
 		"""Get the unicode string result of this task."""
@@ -152,20 +178,6 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
-	
-	# def __iter__(self):
-	# 	"""Iterate the results of a generator task.
-	#
-	# 	It is an error condition to attempt to iterate a non-generator task.
-	# 	"""
-	#
-	# 	# This does _not_ call self.wait() as we aren't waiting for completion, we're waiting for yielded chunks.
-	#
-	# 	# If the task is already complete, return iter(self.result)
-	#
-	# 	# Stream the results out of the message queue.
-	#
-	# 	return None
 	
 	def next(self, timeout=None):
 		pass  # TODO
@@ -228,16 +240,22 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 
 	@property
 	def result(self):
-		self.reload()
+		if (self.task_result is None) and (self.task_exception is None):
+			self.reload()
 		return self.task_result
 
 	@property
-	def exception(self):
-		self.reload()
+	def exception_info(self):
+		if (self.task_exception is None) and (self.task_result is None):
+			self.reload()
 		exc = self.task_exception
 		if exc is None:
-			return None
-		return decode(exc['type']), decode(exc['exception']), exc['traceback']
+			return _ExceptionInfo(None, None, None)
+		return _ExceptionInfo(decode(exc['type']), decode(exc['exception']), exc['traceback'])
+
+	@property
+	def exception(self):
+		return self.exception_info.exception
 
 	def acquire(self):
 		result = Task.objects(
@@ -309,6 +327,7 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	def set_result(self, result):
 		self.task_result = result
 		self.save()
+		return result
 	
 	def set_exception(self, exception):
 		import sys, traceback
@@ -319,12 +338,14 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		typ, value, tb = sys.exc_info()
 		tb = tb.tb_next
 		tb = ''.join(traceback.format_exception(typ, value, tb))
-		self.task_exception = dict(
+		exc = dict(
 			type = encode(typ),
 			exception = encode(value),
 			traceback = tb
 		)
+		self.task_exception = exc
 		self.save()
+		return exc
 	
 	# Futures-compatible executor API.
 	

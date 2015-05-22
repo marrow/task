@@ -173,3 +173,18 @@ class TaskComplete(TaskFinished):
 	
 	if py3:  # pragma: no cover
 		__str__ = __unicode__
+
+
+class TaskIterated(TaskMessage):
+	NORMAL, FINISHED, FAILED = range(3)
+
+	status = IntField(db_field='s', default=0)
+	result = DynamicField(db_field='r')
+
+	def __unicode__(self):
+		if self.status == self.FAILED:
+			return "Task {0.task.id} iteration failed.".format(self)
+		return "Task {0.task.id} iteration completed.".format(self)
+
+	if py3:
+		__str__ = __unicode__
