@@ -120,6 +120,7 @@ class TaskProgress(TaskMessage):
 
 class TaskAcquired(TaskMessage):
 	"""Indicate that a task has been acquired by a worker."""
+	owner = EmbeddedDocumentField(Owner, db_field='o')
 	
 	def __unicode__(self):
 		return "Task {0.task.id} locked by PID {0.sender.pid} on host: {0.sender.host}".format(self)

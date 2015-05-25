@@ -39,6 +39,10 @@ def decode(string):
 	return pickle.loads(string.decode('ascii'))
 
 
+def utcnow():
+	return datetime.utcnow().replace(tzinfo=utc)
+
+
 class GeneratorTaskIterator(object):
 	def __init__(self, task, gen):
 		self.task = task
@@ -75,7 +79,7 @@ class GeneratorTaskIterator(object):
 _ExceptionInfo = namedtuple('_ExceptionInfo', 'type exception traceback')
 
 
-class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
+class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
 	"""The definition of a remotely executed task."""
 	
 	meta = dict(
@@ -226,15 +230,15 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 		Note, also, that these values aren't "live"; `.reload()` the record beforehand if needed.
 		"""
 		
-		if not self._acquired:
+		if not self.time.acquired:
 			return dict(acquired=None, executed=None, completed=None)
 		
-		data = dict(acquired=self._acquired - self._created)
+		data = dict(acquired=self.time.acquired - self.time.created)
 		
-		data['executed'] = (self._acquired - self._executed) if self._executed else None
+		data['executed'] = (self.time.acquired - self.time.executed) if self.time.executed else None
 		
 		# We don't distinguish between cancellation, errors, and successes here.
-		data['completed'] = (self._executed - self._completed) if self._completed else None
+		data['completed'] = (self.time.executed - self.time.completed) if self.time.completed else None
 		
 		return data
 
@@ -257,23 +261,9 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 	def exception(self):
 		return self.exception_info.exception
 
-	def acquire(self):
-		result = Task.objects(
-			id = self.id,
-			time__acquired__exists = False,
-		).update(
-			set__time__acquired = datetime.utcnow().replace(tzinfo=utc)
-		)
-
-		if not result:
-			raise AcquireFailed('%r is already acquired.' % self)
-
-		TaskAcquired.objects.create(task=self)
-		return True
 
 	def _complete_task(self):
-		self.time.completed = datetime.utcnow().replace(tzinfo=utc)
-		self.save()
+		Task.objects(id=self.id).update(set__time__completed=utcnow())
 
 		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
 
@@ -288,20 +278,24 @@ class Task(Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMe
 			return self.task_result
 
 		func = self.callable
+		if isinstance(func, FunctionWrapper):
+			func = func.call
+
 		result = None
+		Task.objects(id=self.id).update(set__time__executed=utcnow())
+
 		try:
-			if isinstance(func, FunctionWrapper):
-				func = func.call
 			result = func(*self.args, **self.kwargs)
-			if isgenerator(result):
-				return GeneratorTaskIterator(self, result)
 		except Exception as exception:
 			self.set_exception(exception)
+			self._complete_task()
+			raise
 		else:
+			if isgenerator(result):
+				return GeneratorTaskIterator(self, result)
 			self.set_result(result)
 
 		self._complete_task()
-
 		return result
 
 	def add_callback(self, callback):

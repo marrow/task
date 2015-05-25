@@ -8,12 +8,23 @@ database:
 
 logging:
   version: 1
+  formatters:
+    acquire:
+      format: ACQUIRE - %(message)s
   handlers:
     console:
       class: logging.StreamHandler
       level: INFO
       stream: ext://sys.stdout
+    console-acquire:
+      class: logging.StreamHandler
+      level: INFO
+      stream: ext://sys.stdout
+      formatter: acquire
   loggers:
     runner:
       handlers: [console]
+      level: INFO
+    task.acquire:
+      handlers: [console-acquire]
       level: INFO

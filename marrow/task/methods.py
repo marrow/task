@@ -46,20 +46,19 @@ class TaskPrivateMethods(object):
 		now = datetime.utcnow().replace(tzinfo=utc)
 		
 		# Attempt to acquire the task lock.
-		count = self.__class__.objects(id=task, _owner=None, _acquired=None).update(
-				set___owner = identity,
-				set___acquired = now
+		count = self.__class__.objects(id=task, owner=None, time__acquired=None).update(
+				set__owner = identity,
+				set__time__acquired = now
 			)
 		
 		# If we failed, let the caller know.
 		if not count:
-			log.warning("Failed to acquire lock on task: %r", self)
+
 			log_acq.error(task)
 			return None
 		
-		TaskAcquired(self, identity).save()  # Notify the queue.
-		
-		log.info("Acquired lock on task: %r", self)
+		self.signal(TaskAcquired, owner=identity)  # Notify the queue.
+
 		log_acq.info(task)
 		
 		return self.reload()
@@ -81,9 +80,9 @@ class TaskPrivateMethods(object):
 		identity = self.identity if force else Owner.identity()
 		
 		# Attempt to release the lock.
-		count = self.__class__.objects(id=task, _owner=identity).update(
-				set___owner = None,
-				set___acquired = None
+		count = self.__class__.objects(id=task, owner=identity).update(
+				set__owner = None,
+				set__time__acquired = None
 			)
 		
 		if not count:
@@ -99,7 +98,7 @@ class TaskPrivateMethods(object):
 	def _execute_standard(self, fn):
 		"""Execute a standard function or method."""
 		try:
-			result = fn(*self._args, **self._kwargs)
+			result = fn(*self.args, **self.kwargs)
 		except Exception as e:
 			pass
 	
@@ -119,16 +118,21 @@ class TaskPrivateMethods(object):
 		
 		if __debug__:  # Expensive call, so we allow it to be optimized (-O) away.
 			log_exc.info("%s(%s%s%s)",
-					self._callable,
-					', '.join(repr(i) for i in self._args),
-					', ' if self._args and self._kwargs else '',
-					', '.join((k + '=' + repr(v)) for k, v in self._kwargs.items())
+					self.callable,
+					', '.join(repr(i) for i in self.args),
+					', ' if self.args and self.kwargs else '',
+					', '.join((k + '=' + repr(v)) for k, v in self.kwargs.items())
 				)
 		else:
-			log_exc.info(self._callable)
+			log_exc.info(self.callable)
 		
-		count = self.objects(id=self.id, owner=self.owner, executed=None, cancelled=None).update(
-				set__executed = now,
+		count = self.__class__.objects(
+				id=self.id,
+				owner=self.owner,
+				time__executed=None,
+				time__cancelled=None
+			).update(
+				set__time__executed = now,
 			)
 		
 		try:
@@ -138,7 +142,7 @@ class TaskPrivateMethods(object):
 			pass
 		
 		try:
-			fn = load(self._callable)  # TODO: Allow use of entry points.
+			fn = load(self.callable)  # TODO: Allow use of entry points.
 		except ImportError:
 			log.critical("Failed to resolve callable: %s", self._callable)
 			return
@@ -148,7 +152,7 @@ class TaskPrivateMethods(object):
 		try:
 			result = self._execute_standard()
 		except:
-			self.objects(id=self.id, executed=None).update(
+			self.objects(id=self.id, time__executed=None).update(
 					
 				)
 		

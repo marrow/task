@@ -94,18 +94,22 @@ class Runner(object):
 		)
 
 	def _process_task(self, task):
-		self.logger.info('Process task %r', task)
-
 		from marrow.task import task as task_decorator
+
 		func = task.callable
 		if not hasattr(func, 'context'):
 			func = task_decorator(func)
+
 		context = self.get_context(task)
 		for key, value in context.iteritems():
 			setattr(func.context, key, value)
 
-		task.handle()
-		self.logger.info('Complete task %r', task)
+		try:
+			task.handle()
+		except Exception:
+			self.logger.warning('Failed: %r', task)
+		else:
+			self.logger.info('Completed: %r', task)
 
 	def run(self):
 		for event in TaskAdded.objects.tail(timeout=self.timeout):
@@ -114,8 +118,8 @@ class Runner(object):
 			try:
 				task.acquire()
 			except AcquireFailed:
-				self.logger.info('Can\'t acquire %r' % task)
+				self.logger.warning("Failed to acquire lock on task: %r", task)
 				continue
 
-			self.logger.info('Acquire task %r', task)
+			self.logger.info("Acquired lock on task: %r", task)
 			self.executor.submit(partial(self._process_task, task))
