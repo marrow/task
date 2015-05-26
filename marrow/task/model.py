@@ -8,6 +8,7 @@ from inspect import isclass, ismethod, isgeneratorfunction, isgenerator
 from pytz import utc
 from datetime import datetime
 from collections import namedtuple
+from concurrent.futures import CancelledError
 from bson import ObjectId
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
 from wrapt.wrappers import FunctionWrapper
@@ -18,7 +19,7 @@ from .compat import py2, unicode
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated
+from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -306,11 +307,14 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			task(callback).defer(self)
 
 	def wait(self, timeout=None):
-		for event in TaskComplete.objects(task=self).tail(timeout):
+		for event in TaskFinished.objects(task=self).tail(timeout):
+			if isinstance(event, TaskCancelled):
+				raise CancelledError
 			break
 		else:
 			raise TimeoutError('%r is timed out.' % self)
-		self.reload()
+
+		return self.reload()
 
 	
 	# Futures-compatible pseudo-internal API.
@@ -426,7 +430,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
 		# If the task has already been run (completed or not) it's too late to cancel it.
 		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cencellation.
-		if not Task.objects(id=task, executed=None).update(set__cancelled=datetime.utcnow().replace(tzinfo=utc)):
+		if not Task.objects(id=task, time__executed=None).update(set__time__cancelled=utcnow()):
 			return False
 		
 		for i in range(3):  # We attempt three times to notify the queue.

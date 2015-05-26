@@ -23,7 +23,7 @@ class TaskFuture(Future):
 	__slots__ = ('_task', )
 	
 	def __init__(self, task):
-		self._task = getattr(task, '_id', task)
+		self._task = getattr(task, 'pk', task)
 	
 	@property
 	def task(self):
@@ -33,13 +33,11 @@ class TaskFuture(Future):
 	def messages(self):
 		return TaskMessage.objects(task=self._task)
 	
-	def _invoke_callbacks(self, only=None):
-		if only:
-			Task.submit(_execute_callback, only, self._task)
-			return
-		
-		for callback in self.task.scalar('callback'):
-			Task.submit(_execute_callback, callback, self._task)
+	def _invoke_callbacks(self):
+		_task = self.task
+		for callback in _task.scalar('callback'):
+			from marrow.task import task
+			task(callback).defer(_task)
 	
 	def __repr__(self):
 		return repr(self.task.get())
@@ -49,16 +47,16 @@ class TaskFuture(Future):
 		return Task.cancel(self._task)
 	
 	def cancelled(self):
-		return Task.cancelled(self._task)
+		return bool(Task.objects.cancelled(id=self._task))
 	
 	def running(self):
-		return Task.objects.running(self._task)
+		return bool(Task.objects.running(id=self._task))
 	
 	def done(self):
-		return Task.objects.done(self._task)
+		return bool(Task.objects.finished(id=self._task))
 	
 	def add_done_callback(self, fn):
-		Task.on(self._task, 'done', fn)
+		self.task.add_callback(fn)
 	
 	def result(self, timeout=None):
-		return Task.result(self._task, timeout)
+		return self.task.wait(timeout).result
