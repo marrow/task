@@ -38,7 +38,7 @@ class PyTest(TestCommand):
 
 here = os.path.abspath(os.path.dirname(__file__))
 
-tests_require = ['pytest', 'pytest-cov']
+tests_require = ['pytest', 'pytest-cov', 'pytest-spec']
 
 setup(
 	name = "marrow.task",
