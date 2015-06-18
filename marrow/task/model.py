@@ -144,7 +144,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				if entry.result is not None:
 					yield entry.result
 
-				raise StopIteration(value=entry.result)
+				if py2:
+					raise StopIteration
+				else:
+					raise StopIteration(value=entry.result)
 
 			elif entry.status == TaskIterated.FAILED:
 				raise self.exception
