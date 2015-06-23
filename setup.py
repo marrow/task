@@ -88,7 +88,7 @@ setup(
 					'thread = concurrent.futures:ThreadPoolExecutor',
 					'process = concurrent.futures:ProcessPoolExecutor',
 				]
-		}
+		},
 
 	zip_safe = False,
 	cmdclass = dict(
