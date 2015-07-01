@@ -51,6 +51,10 @@ class Keepalive(Message):
 	pass
 
 
+class StopRunner(Message):
+	pass
+
+
 class TaskMessage(Message):
 	"""Messages which relate to queued jobs.
 	
@@ -58,7 +62,7 @@ class TaskMessage(Message):
 	"""
 	
 	task = ReferenceField('Task', required=True, db_field='t')
-	
+
 	def __repr__(self, inner=None):
 		if inner:
 			return super(TaskMessage, self).__repr__('task={0.task.id}, {1}'.format(self, inner))

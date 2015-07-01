@@ -14,7 +14,7 @@ except ImportError:
 from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from marrow.task.message import TaskAdded
+from marrow.task.message import TaskAdded, Message, StopRunner
 from marrow.task.exc import AcquireFailed
 from marrow.task.compat import str, unicode
 
@@ -112,7 +112,11 @@ class Runner(object):
 			self.logger.info('Completed: %r', task)
 
 	def run(self):
-		for event in TaskAdded.objects.tail(timeout=self.timeout):
+		for event in Message.objects.tail(timeout=self.timeout):
+			if isinstance(event, StopRunner):
+				return
+			if not isinstance(event, TaskAdded):
+				continue
 			task = event.task
 
 			try:
