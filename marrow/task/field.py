@@ -13,6 +13,8 @@ from marrow.package.loader import load
 
 class PythonReferenceField(BaseField):
 	def to_python(self, value):
+		if callable(value):
+			return value
 		return load(value)
 
 	def to_mongo(self, value):

@@ -191,5 +191,5 @@ class TaskIterated(TaskMessage):
 			return "Task {0.task.id} iteration failed.".format(self)
 		return "Task {0.task.id} iteration completed.".format(self)
 
-	if py3:
+	if py3:  # pragma: no cover
 		__str__ = __unicode__

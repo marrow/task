@@ -4,15 +4,20 @@ import pytest
 import mongoengine
 
 from functools import partial
-from marrow.task.message import Keepalive
+from marrow.task.message import Message
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 def connection(request):
 	"""Automatically connect before testing and discard data after testing."""
 	connection = mongoengine.connect('testing')
 	connection.testing.drop_collection("TaskQueue")
-	Keepalive.objects.create()
+	connection.testing.create_collection(
+		Message._meta['collection'],
+		capped=True,
+		size=Message._meta['max_size'],
+		max=Message._meta['max_documents']
+	)
 
 	request.addfinalizer(partial(connection.drop_database, 'testing'))
 	return connection

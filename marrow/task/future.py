@@ -35,7 +35,7 @@ class TaskFuture(Future):
 	
 	def _invoke_callbacks(self):
 		_task = self.task
-		for callback in _task.scalar('callback'):
+		for callback in _task.scalar('callbacks'):
 			from marrow.task import task
 			task(callback).defer(_task)
 	

@@ -102,7 +102,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	
 	task_exception = DynamicField(db_field='exc', default=None)
 	task_result = DynamicField(db_field='res', default=None)
-	callback = ListField(PythonReferenceField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
+	callbacks = ListField(PythonReferenceField(), db_field='rcb')  # Technically these are just the callables for new tasks to enqueue!
 	
 	time = EmbeddedDocumentField(Times, db_field='t', default=Times)
 	creator = EmbeddedDocumentField(Owner, db_field='c', default=Owner.identity)
@@ -168,7 +168,6 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	
 	def __str__(self):
 		"""Get the unicode string result of this task."""
-		self.wait()  # Doesn't block if already completed.
 		return unicode(self.result)
 	
 	def __bytes__(self):
@@ -176,11 +175,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return unicode(self).encode('unicode_escape')
 	
 	def __int__(self):
-		self.wait()
 		return int(self.result)
 	
 	def __float__(self):
-		self.wait()
 		return float(self.result)
 	
 	if py2:  # pragma: no cover
@@ -247,9 +244,13 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return data
 
 	@property
-	def result(self):
-		if (self.task_result is None) and (self.task_exception is None):
-			self.reload()
+	def result(self, timeout=None):
+		if not self.time.completed:
+			self.wait(timeout)
+
+		if self.task_exception:
+			raise self.exception
+
 		return self.task_result
 
 	@property
@@ -265,17 +266,20 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def exception(self):
 		return self.exception_info.exception
 
+	def _invoke_callbacks(self):
+		from marrow.task import task
+
+		for callback in self.callbacks:
+			task(callback).defer(self)
 
 	def _complete_task(self):
 		Task.objects(id=self.id).update(set__time__completed=utcnow())
 
 		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
 
-		from marrow.task import task
-		self.reload('callback', 'time')
+		self.reload('callbacks', 'time')
 		if self.successful:
-			for callback in self.callback:
-				task(callback).defer(self)
+			self._invoke_callbacks()
 
 	def handle(self):
 		if self.time.completed:
@@ -302,12 +306,15 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		self._complete_task()
 		return result
 
-	def add_callback(self, callback):
+	def add_done_callback(self, callback):
 		from marrow.task import task
-		self.callback.append(callback)
-		self.save()
-		if self.completed:
+
+		if self.done() or self.cancelled():
 			task(callback).defer(self)
+			return
+
+		self.callbacks.append(callback)
+		self.save()
 
 	def wait(self, timeout=None):
 		for event in TaskFinished.objects(task=self).tail(timeout):
@@ -350,26 +357,24 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	
 	# Futures-compatible executor API.
 	
-	def _notify_added(self, task):
+	def _notify_added(self):
 		try:
-			TaskAdded(task=task).save()
+			TaskAdded(task=self).save()
 		except:
 			log.exception("Unable to submit task.")
-			task.cancel()
+			self.cancel()
 			raise Exception("Unable to submit task.")
 		
-		return task
+		return self
 	
 	@classmethod
 	def submit(cls, fn, *args, **kwargs):
 		"""Submit a task for execution as soon as possible."""
 		
-		callable = name(fn)
-		
 		log.info("", fn)
 		
 		record = cls(callable=fn, args=args, kwargs=kwargs).save()  # Step one, create and save a pending task record.
-		record.notify(TaskAdded)  # Step two, notify everyone waiting for tasks.
+		record.signal(TaskAdded)  # Step two, notify everyone waiting for tasks.
 		
 		# Because the record acts like a Futures object, we can just return it.
 		return record
@@ -391,30 +396,33 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		
 		Raises TimeoutError if __next__ is called and the result isn't available within timeout seconds.
 		"""
+		from itertools import izip
 		timeout = kw.pop('timeout', None)
 		
 		if kw: raise TypeError("unexpected keyword argument: {0}".format(', '.join(kw)))
-		
-		yield
-		
-		return
-	
+
+		tasks = []
+		for args in izip(*iterables):
+			task = cls(callable=fn, args=args).save()
+			task.signal(TaskAdded)
+			tasks.append(task)
+
+		for task in tasks:
+			yield task.wait(timeout=timeout).result
+
 	@classmethod
 	def shutdown(cls, wait=True):
 		"""Signal the worker pool that it should stop processing after currently excuting tasks have completed."""
 		pass
 	
 	# Helper methods.
-	def signal(self, kind, **kwargs):
-		return self._signal(kind, **kwargs)
-	
-	def _signal(self, kind, **kw):
+	def signal(self, kind, **kw):
 		message = kind(task=self, sender=self.creator, **kw)
 		
 		for i in range(3):
 			try:
 				message.save()
-			except:
+			except Exception:
 				pass
 
 	# Futures-compatible future API.
@@ -426,13 +434,13 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		Returns True if the task was cancelled, False otherwise.
 		"""
 		
-		task = ObjectId(getattr(task, '_id', task))
+		task = ObjectId(getattr(task, 'id', task))
 		
 		log.debug("Attempting to cancel task {0}.".format(task), extra=dict(task=task))
 		
 		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
 		# If the task has already been run (completed or not) it's too late to cancel it.
-		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cencellation.
+		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cancellation.
 		if not Task.objects(id=task, time__executed=None).update(set__time__cancelled=utcnow()):
 			return False
 		
@@ -456,18 +464,15 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def waiting(self):
 		return bool(Task.objects.accepted(id=self.id).count())
 
-	@property
 	def cancelled(self):
 		"""Return Ture if the task has been cancelled."""
 		return bool(Task.objects.cancelled(id=self.id).count())
 	
-	@property
 	def running(self):
 		"""Return True if the task is currently executing."""
 		return bool(Task.objects.running(id=self.id).count())
 	
-	@property
-	def completed(self):
+	def done(self):
 		"""Return True if the task was cancelled or finished executing."""
 		return bool(Task.objects.finished(id=self.id).count())
 
@@ -478,41 +483,3 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	@property
 	def failed(self):
 		return bool(Task.objects.failed(id=self.id).count())
-	
-	def result_old(self, timeout=None):
-		"""Return the value returned by the call.
-
-		If the task has not completed yet, wait up to `timeout` seconds, or forever if `timeout` is None.
-
-		On timeout, TimeoutError is raised.  If the task is cancelled, CancelledError is raised.
-
-		If the task failed (raised an exception internally) than TaskError is raised.
-		"""
-
-		# completed, result, exception = Task.objects(id=self).scalar('completed', 'task_result', 'task_exception').get()
-		self.reload()
-
-		if self.time.completed:  # We can exit early, this task was previously completed.
-			if self.task_exception:
-				raise Exception(self.task_exception)
-
-			return self.task_result
-
-		# Otherwise we wait.
-		for event in TaskFinished.objects(task=self._task).tail(timeout):
-			if isinstance(event, TaskCancelled):
-				raise CancelledError()
-
-			if not message.success:
-				raise Exception(message.result)
-
-			return message.result
-
-		else:
-			raise TimeoutError()
-	
-	# def exception(self, timeout=None):
-	# 	pass
-	
-	def add_done_callback(self, fn):
-		Task.objects(id=self.id).update()
