@@ -8,7 +8,15 @@ from mongoengine import QuerySet, Q
 
 class CappedQuerySet(QuerySet):
 	"""A custom queryset that allows for tailing of capped collections."""
-	
+
+	def __init__(self, *args, **kwargs):
+		super(CappedQuerySet, self).__init__(*args, **kwargs)
+		self._running = True
+
+	def interrupt(self):
+		"""Set `_running` flag to False, thus stop fetching database after current iteration."""
+		self._running = False
+
 	def tail(self, timeout=None):
 		"""A generator which will block and yield entries as they are added to the collection.
 		
@@ -39,10 +47,10 @@ class CappedQuerySet(QuerySet):
 		# We track the last seen ID to allow us to efficiently re-query from where we left off.
 		last = None
 		
-		while True:
+		while self._running:
 			cursor = collection.find(query, tailable=True, await_data=True, **q._cursor_args)
 			
-			while True:
+			while self._running:
 				try:
 					record = next(cursor)
 				except StopIteration:

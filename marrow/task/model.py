@@ -19,7 +19,7 @@ from .compat import py2, unicode
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished
+from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished, StopRunner
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -412,9 +412,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	@classmethod
 	def shutdown(cls, wait=True):
-		"""Signal the worker pool that it should stop processing after currently excuting tasks have completed."""
-		pass
-	
+		"""Signal the worker pool that it should stop processing after currently executing tasks have completed."""
+		StopRunner.objects.create()
+
 	# Helper methods.
 	def signal(self, kind, **kw):
 		message = kind(task=self, sender=self.creator, **kw)

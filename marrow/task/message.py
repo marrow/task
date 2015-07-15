@@ -51,7 +51,19 @@ class Keepalive(Message):
 	pass
 
 
-class StopRunner(Message):
+class ProcessingMessage(Message):
+	processed_time = DateTimeField(db_field='p', default=datetime.fromtimestamp(0))
+
+	def process(self):
+		self.processed_time = datetime.utcnow()
+		self.save()
+
+	@property
+	def processed(self):
+		return self.processed_time != self.__class__.processed_time.default
+
+
+class StopRunner(ProcessingMessage):
 	pass
 
 

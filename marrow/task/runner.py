@@ -56,6 +56,7 @@ class Runner(object):
 		# Get first logger name from config or class name.
 		logger_name = next(config['logging'].get('loggers', {self.__class__.__name__: None}).iterkeys())
 		self.logger = logging.getLogger(logger_name)
+		self.queryset = Message.objects
 
 	def _get_config(self, config):
 		base = deepcopy(DEFAULT_CONFIG)
@@ -111,17 +112,21 @@ class Runner(object):
 		else:
 			self.logger.info('Completed: %r', task)
 
+	def interrupt(self):
+		self.queryset.interrupt()
+
 	def run(self):
-		for event in Message.objects.tail(timeout=self.timeout):
-			if isinstance(event, StopRunner):
+		for event in self.queryset.tail(timeout=self.timeout):
+			if isinstance(event, StopRunner) and not event.processed:
+				print("STOPPED")
+				event.process()
 				return
 			if not isinstance(event, TaskAdded):
 				continue
 			task = event.task
 
-			try:
-				task.acquire()
-			except AcquireFailed:
+			if task.acquire() is None:
+			# except AcquireFailed:
 				self.logger.warning("Failed to acquire lock on task: %r", task)
 				continue
 
