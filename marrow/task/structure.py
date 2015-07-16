@@ -9,7 +9,7 @@ from pytz import utc
 
 from mongoengine import EmbeddedDocument, EmbeddedDocumentField, StringField, IntField, ListField, DictField, DynamicField, DateTimeField
 
-from .compat import py2, unicode
+from .compat import py2, unicode, iteritems
 
 
 class Owner(EmbeddedDocument):
@@ -136,5 +136,5 @@ class Times(EmbeddedDocument):
 
 	def __repr__(self):
 		fdt = lambda dt: dt.strftime('%Y-%m-%d %H:%M:%S')
-		text = ', '.join('{0}={1}'.format(key, fdt(value)) for key, value in self._data.iteritems() if value is not None)
+		text = ', '.join('{0}={1}'.format(key, fdt(value)) for key, value in iteritems(self._data) if value is not None)
 		return 'Times({0})'.format(text)

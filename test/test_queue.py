@@ -9,6 +9,7 @@ from threading import Thread
 from mongoengine import Document, StringField, IntField
 
 from marrow.task.queryset import CappedQuerySet
+from marrow.task.compat import range
 
 
 class Log(Document):

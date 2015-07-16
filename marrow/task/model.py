@@ -7,7 +7,6 @@ from logging import getLogger
 from inspect import isclass, ismethod, isgeneratorfunction, isgenerator
 from pytz import utc
 from datetime import datetime
-from collections import namedtuple
 from concurrent.futures import CancelledError
 from bson import ObjectId
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
@@ -15,7 +14,7 @@ from wrapt.wrappers import FunctionWrapper
 from marrow.package.canonical import name
 from marrow.package.loader import load
 
-from .compat import py2, unicode
+from .compat import py2, unicode, range, zip
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
@@ -33,11 +32,16 @@ log_ = getLogger('task.')  #
 
 
 def encode(obj):
-	return pickle.dumps(obj).encode('ascii')
+	result = pickle.dumps(obj)
+	if py2:
+		result = result.encode('ascii')
+	return result
 
 
 def decode(string):
-	return pickle.loads(string.decode('ascii'))
+	if py2:
+		string = string.decode('ascii')
+	return pickle.loads(string)
 
 
 def utcnow():
@@ -75,9 +79,6 @@ class GeneratorTaskIterator(object):
 			return item
 
 	__next__ = next
-
-
-_ExceptionInfo = namedtuple('_ExceptionInfo', 'type exception traceback')
 
 
 class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorMethods, TaskFutureMethods
@@ -147,7 +148,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				if py2:
 					raise StopIteration
 				else:
-					raise StopIteration(value=entry.result)
+					raise StopIteration(entry.result)
 
 			elif entry.status == TaskIterated.FAILED:
 				raise self.exception
@@ -259,12 +260,12 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			self.reload()
 		exc = self.task_exception
 		if exc is None:
-			return _ExceptionInfo(None, None, None)
-		return _ExceptionInfo(decode(exc['type']), decode(exc['exception']), exc['traceback'])
+			return None, None
+		return decode(exc['exception']), exc['traceback']
 
 	@property
 	def exception(self):
-		return self.exception_info.exception
+		return self.exception_info[0]
 
 	def _invoke_callbacks(self):
 		from marrow.task import task
@@ -347,7 +348,6 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		tb = tb.tb_next
 		tb = ''.join(traceback.format_exception(typ, value, tb))
 		exc = dict(
-			type = encode(typ),
 			exception = encode(value),
 			traceback = tb
 		)
@@ -396,13 +396,12 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		
 		Raises TimeoutError if __next__ is called and the result isn't available within timeout seconds.
 		"""
-		from itertools import izip
 		timeout = kw.pop('timeout', None)
 		
 		if kw: raise TypeError("unexpected keyword argument: {0}".format(', '.join(kw)))
 
 		tasks = []
-		for args in izip(*iterables):
+		for args in zip(*iterables):
 			task = cls(callable=fn, args=args).save()
 			task.signal(TaskAdded)
 			tasks.append(task)
@@ -413,6 +412,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	@classmethod
 	def shutdown(cls, wait=True):
 		"""Signal the worker pool that it should stop processing after currently executing tasks have completed."""
+		from marrow.task.runner import Runner
+		if isinstance(wait, Runner):
+			wait.interrupt()
+			return
+
 		StopRunner.objects.create()
 
 	# Helper methods.

@@ -77,7 +77,7 @@ class TaskPrivateMethods(object):
 		"""
 		
 		task = unicode(self.id)
-		identity = self.identity if force else Owner.identity()
+		identity = self.owner if force else Owner.identity()
 		
 		# Attempt to release the lock.
 		count = self.__class__.objects(id=task, owner=identity).update(

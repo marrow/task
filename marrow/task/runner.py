@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import TaskAdded, Message, StopRunner
 from marrow.task.exc import AcquireFailed
-from marrow.task.compat import str, unicode
+from marrow.task.compat import str, unicode, iterkeys, iteritems
 
 
 # logging.basicConfig()
@@ -54,7 +54,7 @@ class Runner(object):
 
 		logging.config.dictConfig(config['logging'])
 		# Get first logger name from config or class name.
-		logger_name = next(config['logging'].get('loggers', {self.__class__.__name__: None}).iterkeys())
+		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)
 		self.queryset = Message.objects
 
@@ -102,7 +102,7 @@ class Runner(object):
 			func = task_decorator(func)
 
 		context = self.get_context(task)
-		for key, value in context.iteritems():
+		for key, value in iteritems(context):
 			setattr(func.context, key, value)
 
 		try:
@@ -123,6 +123,7 @@ class Runner(object):
 				return
 			if not isinstance(event, TaskAdded):
 				continue
+
 			task = event.task
 
 			if task.acquire() is None:

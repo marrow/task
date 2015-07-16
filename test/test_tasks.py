@@ -1,6 +1,6 @@
 # encoding: utf-8
 
-from __future__ import unicode_literals
+from __future__ import unicode_literals, print_function
 
 import threading
 
@@ -8,8 +8,8 @@ import pytest
 
 from marrow.task import task as task_decorator
 from marrow.task import Task
-from marrow.task.message import Keepalive, StopRunner
 from marrow.task.runner import Runner
+from marrow.task.compat import range
 
 
 @task_decorator
@@ -61,6 +61,7 @@ def exception_subject():
 @pytest.fixture(scope='function')
 def runner(request, connection):
 	runner = Runner('./example/config.yaml')
+	runner.timeout = 10
 	th = threading.Thread(target=runner.run)
 
 	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
@@ -80,7 +81,7 @@ def runner(request, connection):
 def task(request, connection):
 	t = subject.defer(4)
 	t.reload()
-	print "Task created: %s" % t.id
+	print("Task created: %s" % t.id)
 
 	def finalizer():
 		print('DELETED')

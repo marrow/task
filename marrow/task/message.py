@@ -195,7 +195,7 @@ class TaskComplete(TaskFinished):
 class TaskIterated(TaskMessage):
 	NORMAL, FINISHED, FAILED = range(3)
 
-	status = IntField(db_field='s', default=0)
+	status = IntField(db_field='st', default=0)
 	result = DynamicField(db_field='r')
 
 	def __unicode__(self):
