@@ -291,7 +291,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			func = func.call
 
 		result = None
-		Task.objects(id=self.id).update(set__time__executed=utcnow())
+		# Task.objects(id=self.id).update(set__time__executed=utcnow())
 
 		try:
 			result = func(*self.args, **self.kwargs)
@@ -331,7 +331,12 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Futures-compatible pseudo-internal API.
 	
 	def set_running_or_notify_cancel(self):
-		pass
+		if self.cancelled():
+			return False
+		if self.state == 'acquired':
+			Task.objects(id=self.id).update(set__time__executed=utcnow())
+			return True
+		raise RuntimeError('Task in unexpected state')
 	
 	def set_result(self, result):
 		self.task_result = result
@@ -397,17 +402,40 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		Raises TimeoutError if __next__ is called and the result isn't available within timeout seconds.
 		"""
 		timeout = kw.pop('timeout', None)
-		
+
 		if kw: raise TypeError("unexpected keyword argument: {0}".format(', '.join(kw)))
 
-		tasks = []
-		for args in zip(*iterables):
-			task = cls(callable=fn, args=args).save()
-			task.signal(TaskAdded)
-			tasks.append(task)
+		def map_iterator():
+			import time
 
-		for task in tasks:
-			yield task.wait(timeout=timeout).result
+			if timeout is not None:
+				end_time = time.time() + timeout
+
+			tasks = []
+			for args in zip(*iterables):
+				task = cls(callable=fn, args=args).save()
+				task.signal(TaskAdded)
+				tasks.append(task)
+
+			failed = None
+			for task in tasks:
+				if failed is not None:
+					Task.cancel(task)
+					continue
+
+				try:
+					if timeout is None:
+						yield task.wait().result
+					else:
+						yield task.wait(timeout=end_time - time.time()).result
+				except TimeoutError as exc:
+					failed = exc
+					Task.cancel(task)
+
+			if failed is not None:
+				raise failed
+
+		return map_iterator()
 
 	@classmethod
 	def shutdown(cls, wait=True):
@@ -441,7 +469,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		task = ObjectId(getattr(task, 'id', task))
 		
 		log.debug("Attempting to cancel task {0}.".format(task), extra=dict(task=task))
-		
+
 		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
 		# If the task has already been run (completed or not) it's too late to cancel it.
 		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cancellation.
@@ -460,7 +488,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			return False
 		
 		log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
-		
+
 		return True
 
 	# Properties

@@ -97,6 +97,9 @@ class Runner(object):
 	def _process_task(self, task):
 		from marrow.task import task as task_decorator
 
+		if not task.set_running_or_notify_cancel():
+			return
+
 		func = task.callable
 		if not hasattr(func, 'context'):
 			func = task_decorator(func)
@@ -112,22 +115,47 @@ class Runner(object):
 		else:
 			self.logger.info('Completed: %r', task)
 
-	def interrupt(self):
+	def shutdown(self, wait=None):
+		if not wait:
+			# Shutdown after currently processing task.
+			self.queryset.interrupt()
+			self.logger.info('Runner is interrupted')
+			return
+
+		if wait is True:
+			# Shutdown after all tasks that added before this call.
+			StopRunner.objects.create()
+			self.logger.info('Runner finishing work')
+			return
+
+		# Wait until no new messages added for `wait` seconds.
+		import time
+
+		last = Message.objects.count()
+		end_time = time.time() + wait
+
+		self.logger.info('Runner waiting for end of messages')
+		while time.time() < end_time:
+			count = Message.objects.count()
+			if count > last:
+				last = count
+				end_time = time.time() + wait
+
 		self.queryset.interrupt()
 
 	def run(self):
 		for event in self.queryset.tail(timeout=self.timeout):
 			if isinstance(event, StopRunner) and not event.processed:
-				print("STOPPED")
+				self.logger.info("Runner is stopped")
 				event.process()
 				return
+
 			if not isinstance(event, TaskAdded):
 				continue
 
 			task = event.task
 
 			if task.acquire() is None:
-			# except AcquireFailed:
 				self.logger.warning("Failed to acquire lock on task: %r", task)
 				continue
 

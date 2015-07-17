@@ -66,10 +66,10 @@ def runner(request, connection):
 
 	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
 	# Add it as finalizer for same at failures.
-	def stop():
-		# StopRunner.objects.create()
-		runner.interrupt()
+	def stop(wait=None):
+		runner.shutdown(wait)
 		th.join()
+
 	runner.stop_test_runner = stop
 	request.addfinalizer(stop)
 
@@ -141,6 +141,15 @@ class TestTasks(object):
 		assert Task.objects.count() - count == len(data)
 		assert result == ['Hail, %s!' % god for god in data]
 		runner.stop_test_runner()
+
+	def test_map_timeout(self, runner):
+		from marrow.task.exc import TimeoutError
+
+		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
+		result = Task.map(sleep_subject, data, timeout=1)
+		with pytest.raises(TimeoutError):
+			list(result)
+		runner.stop_test_runner(3)
 
 	def test_callback(self, runner):
 		task = sleep_subject.defer(42)
