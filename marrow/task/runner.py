@@ -14,12 +14,15 @@ except ImportError:
 from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from marrow.task.message import TaskAdded, Message, StopRunner
+from marrow.task.message import TaskAdded, Message, StopRunner, IterationRequest, TaskMessage
 from marrow.task.exc import AcquireFailed
 from marrow.task.compat import str, unicode, iterkeys, iteritems
 
 
 # logging.basicConfig()
+
+
+_runners = {}
 
 
 DEFAULT_CONFIG = dict(
@@ -35,6 +38,66 @@ DEFAULT_CONFIG = dict(
 		version = 1,
 	)
 )
+
+
+class RunningTask(object):
+	def __init__(self, runner, task):
+		self.runner = runner
+		self.task = task
+
+	def handle(self):
+		print('RUNNER RUNNING')
+		from marrow.task import task as task_decorator
+
+		if not self.task.set_running_or_notify_cancel():
+			return
+
+		func = self.task.callable
+		if not hasattr(func, 'context'):
+			func = task_decorator(func)
+
+		context = self.get_context(self.task)
+		for key, value in iteritems(context):
+			setattr(func.context, key, value)
+
+		result = None
+		try:
+			result = self.task.handle()
+		except Exception:
+			self.runner.logger.warning('Failed: %r', self.task)
+		else:
+			self.runner.logger.info('Completed: %r', self.task)
+
+		# import ipdb; ipdb.set_trace()
+		# TODO: Not sure that it should be made that way.
+		from marrow.task.model import GeneratorTaskIterator
+		if isinstance(result, GeneratorTaskIterator):
+			_runners[unicode(self.task.id)] = RunningGenerator(result)
+			return
+
+		del _runners[unicode(self.task.id)]
+
+	def get_context(self, task):
+		return dict(
+			id = task.id,
+		)
+
+
+class RunningGenerator(object):
+	def __init__(self, iterator):
+		self.iterator = iterator
+
+	def next(self):
+		try:
+			next(self.iterator)
+		except StopIteration:
+			del _runners[unicode(self.iterator.task.id)]
+		else:
+			self.iterator.task._invoke_callbacks()
+
+
+def _process_task(task_id):
+	_runners[task_id].handle()
 
 
 class Runner(object):
@@ -89,31 +152,6 @@ class Runner(object):
 			return
 		self._connection = connect(**config)
 
-	def get_context(self, task):
-		return dict(
-			id = task.id,
-		)
-
-	def _process_task(self, task):
-		from marrow.task import task as task_decorator
-
-		if not task.set_running_or_notify_cancel():
-			return
-
-		func = task.callable
-		if not hasattr(func, 'context'):
-			func = task_decorator(func)
-
-		context = self.get_context(task)
-		for key, value in iteritems(context):
-			setattr(func.context, key, value)
-
-		try:
-			task.handle()
-		except Exception:
-			self.logger.warning('Failed: %r', task)
-		else:
-			self.logger.info('Completed: %r', task)
 
 	def shutdown(self, wait=None):
 		if not wait:
@@ -150,14 +188,22 @@ class Runner(object):
 				event.process()
 				return
 
-			if not isinstance(event, TaskAdded):
+			if not isinstance(event, TaskMessage):
 				continue
 
 			task = event.task
 
-			if task.acquire() is None:
-				self.logger.warning("Failed to acquire lock on task: %r", task)
-				continue
+			if isinstance(event, TaskAdded):
+				if task.acquire() is None:
+					self.logger.warning("Failed to acquire lock on task: %r", task)
+					continue
 
-			self.logger.info("Acquired lock on task: %r", task)
-			self.executor.submit(partial(self._process_task, task))
+				self.logger.info("Acquired lock on task: %r", task)
+				r = RunningTask(self, task)
+				_runners[unicode(task.id)] = r
+				self.executor.submit(partial(_process_task, unicode(task.id)))
+
+			elif isinstance(event, IterationRequest):
+				runner = _runners.get(unicode(task.id))
+				if runner is not None:
+					runner.next()

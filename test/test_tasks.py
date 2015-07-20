@@ -9,7 +9,7 @@ import pytest
 from marrow.task import task as task_decorator
 from marrow.task import Task
 from marrow.task.runner import Runner
-from marrow.task.compat import range
+from marrow.task.compat import range, py2
 
 
 @task_decorator
@@ -23,9 +23,13 @@ def subject2(a):
 
 
 @task_decorator
-def generator_subject():
+def generator_subject(fail=False, exc_val=None):
 	for i in range(10):
+		if fail and i == 5:
+			raise ValueError('FAILURE')
 		yield i
+	if exc_val:
+		raise StopIteration(exc_val)
 
 
 @task_decorator
@@ -117,7 +121,7 @@ class TestTasks(object):
 		assert str(result) == "String 42"
 		runner.stop_test_runner()
 
-	def test_generator(self, runner):
+	def test_generator(self):
 		from functools import partial
 
 		gen = generator_subject.defer()
@@ -132,7 +136,29 @@ class TestTasks(object):
 
 		assert list(gen) == list(range(10))
 		handler.join()
-		runner.stop_test_runner()
+
+	def test_generator_task(self, runner):
+		task = generator_subject.defer(fail=False)
+		assert list(task) == list(range(10))
+		from marrow.task.message import TaskIterated
+		count = TaskIterated.objects.count()
+		assert list(task) == list(range(10))
+		assert TaskIterated.objects.count() == count
+		runner.stop_test_runner(5)
+
+	@pytest.mark.skipif(py2, reason="requires python3")
+	def test_generator_task_exception_value(self, runner):
+		task = generator_subject.defer(exc_value=42)
+		import ipdb; ipdb.set_trace()
+		assert list(task) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42]
+		runner.stop_test_runner(5)
+
+	def test_generator_task_exception(self, runner):
+		task = generator_subject.defer(fail=True)
+		with pytest.raises(ValueError):
+			list(task)
+		assert 'FAILURE' in str(task.exception)
+		runner.stop_test_runner(5)
 
 	def test_map(self, runner):
 		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
@@ -174,3 +200,22 @@ class TestTasks(object):
 		assert 'FAILURE' in str(exc.value)
 		assert_task(task, 'failed')
 		runner.stop_test_runner()
+
+	def test_acquire(self, task):
+		assert task.release() is None
+		assert isinstance(task.acquire(), Task)
+		assert task.acquire() is None
+		assert isinstance(task.release(), Task)
+		assert task.release() is None
+
+		from marrow.task.structure import Owner
+		test_owner = Owner.identity()
+		test_owner.pid += 1
+
+		task.acquire()
+		assert task.owner is not None
+		task.owner = test_owner
+		task.save()
+
+		assert task.release() is None
+		assert isinstance(task.release(force=True), Task)

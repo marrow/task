@@ -62,6 +62,7 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 			args = args[1:]
 
 		task.args = args
+		task.kwargs = kwargs
 		task.save()
 
 		if task.time.scheduled:

@@ -43,6 +43,7 @@ class TaskPrivateMethods(object):
 		# Capture the current process identity and current time.
 		task = unicode(self.id)
 		identity = Owner.identity()
+		print(">>> IDENTITY: %s" % identity)
 		now = datetime.utcnow().replace(tzinfo=utc)
 		
 		# Attempt to acquire the task lock.
@@ -53,7 +54,6 @@ class TaskPrivateMethods(object):
 		
 		# If we failed, let the caller know.
 		if not count:
-
 			log_acq.error(task)
 			return None
 		

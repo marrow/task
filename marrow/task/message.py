@@ -192,6 +192,10 @@ class TaskComplete(TaskFinished):
 		__str__ = __unicode__
 
 
+class IterationRequest(TaskMessage):
+	pass
+
+
 class TaskIterated(TaskMessage):
 	NORMAL, FINISHED, FAILED = range(3)
 

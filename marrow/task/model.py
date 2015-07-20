@@ -50,6 +50,7 @@ def utcnow():
 
 class GeneratorTaskIterator(object):
 	def __init__(self, task, gen):
+		print('GeneratorTaskIterator')
 		self.task = task
 		self.generator = gen
 
@@ -57,24 +58,26 @@ class GeneratorTaskIterator(object):
 		return self
 
 	def next(self):
+		print("CALLED")
 		try:
 			item = next(self.generator)
 
 		except StopIteration as exception:
+			print('STOPPED')
 			value = getattr(exception, 'value', None)
 			self.task.signal(TaskIterated, status=TaskIterated.FINISHED, result=value)
-			result = list(TaskIterated.objects(task=self.task, result__ne=None).scalar('result'))
-			self.task.set_result(result)
 			self.task._complete_task()
 			raise
 
 		except Exception as exception:
+			print('EXCEPTION')
 			exc = self.task.set_exception(exception)
 			self.task.signal(TaskIterated, status=TaskIterated.FAILED, result=exc)
 			self.task._complete_task()
 			raise StopIteration()
 
 		else:
+			Task.objects(id=self.task.id).update(push__task_result=item)
 			self.task.signal(TaskIterated, status=TaskIterated.NORMAL, result=item)
 			return item
 
@@ -140,7 +143,12 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				yield item
 			raise StopIteration
 
+		from marrow.task.message import IterationRequest
+
+		self.signal(IterationRequest)
+		print('In iterator')
 		for entry in TaskIterated.objects(task=self).tail():
+			print('Iterated')
 			if entry.status == TaskIterated.FINISHED:
 				if entry.result is not None:
 					yield entry.result
@@ -153,10 +161,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			elif entry.status == TaskIterated.FAILED:
 				raise self.exception
 
-			if entry.result is None:
-				continue
+			if entry.result is not None:
+				yield entry.result
 
-			yield entry.result
+			self.signal(IterationRequest)
+
 
 	def result_iterator(self):
 		"""Iterate the results of a generator task.
@@ -166,7 +175,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if not self.generator:
 			raise ValueError('Cannot use on non-generator tasks.')
 		return self._result_iterator()
-	
+
 	def __str__(self):
 		"""Get the unicode string result of this task."""
 		return unicode(self.result)
@@ -301,6 +310,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			raise
 		else:
 			if isgenerator(result):
+				Task.objects(id=self.id).update(set__task_result=[])
 				return GeneratorTaskIterator(self, result)
 			self.set_result(result)
 
@@ -339,8 +349,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		raise RuntimeError('Task in unexpected state')
 	
 	def set_result(self, result):
-		self.task_result = result
-		self.save()
+		Task.objects(id=self.id).update(set__task_result=result)
 		return result
 	
 	def set_exception(self, exception):
@@ -356,8 +365,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			exception = encode(value),
 			traceback = tb
 		)
-		self.task_exception = exc
-		self.save()
+		Task.objects(id=self.id).update(set__task_exception=exc)
 		return exc
 	
 	# Futures-compatible executor API.
