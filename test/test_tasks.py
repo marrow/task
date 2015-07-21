@@ -9,7 +9,7 @@ import pytest
 from marrow.task import task as task_decorator
 from marrow.task import Task
 from marrow.task.runner import Runner
-from marrow.task.compat import range, py2
+from marrow.task.compat import range, py2, py33
 
 
 @task_decorator
@@ -116,6 +116,11 @@ class TestTasks(object):
 		assert str(task) == "168"
 		runner.stop_test_runner()
 
+	def test_defer_float(self, runner):
+		task = subject.defer(14.2)
+		assert float(task) == 596.4
+		runner.stop_test_runner()
+
 	def test_runner(self, runner):
 		result = subject2(42)
 		assert str(result) == "String 42"
@@ -146,14 +151,17 @@ class TestTasks(object):
 		assert TaskIterated.objects.count() == count
 		runner.stop_test_runner(5)
 
-	@pytest.mark.skipif(py2, reason="requires python3")
+	@pytest.mark.skipif(not py33, reason="requires Python 3.3")
 	def test_generator_task_exception_value(self, runner):
-		task = generator_subject.defer(exc_value=42)
-		import ipdb; ipdb.set_trace()
+		task = generator_subject.defer(exc_val=42)
 		assert list(task) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42]
 		runner.stop_test_runner(5)
 
 	def test_generator_task_exception(self, runner):
+		task = subject.defer(42)
+		with pytest.raises(ValueError) as exc:
+			list(task)
+		assert 'Cannot use on non-generator tasks.' in str(exc)
 		task = generator_subject.defer(fail=True)
 		with pytest.raises(ValueError):
 			list(task)

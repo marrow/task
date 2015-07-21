@@ -4,6 +4,7 @@ import sys
 
 py2 = sys.version_info < (3, )
 py3 = sys.version_info > (3, )
+py33 = sys.version_info > (3, 3)
 
 if py3:  # pragma: no cover
 	import builtins

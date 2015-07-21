@@ -24,7 +24,8 @@ class Message(Document):
 	
 	sender = EmbeddedDocumentField(Owner, db_field='s', default=Owner.identity)
 	created = DateTimeField(db_field='w', default=datetime.utcnow)
-	
+	processed_time = DateTimeField(db_field='p', default=datetime.fromtimestamp(0))
+
 	def __repr__(self, inner=None):
 		if inner:
 			return '{0.__class__.__name__}({0.id}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.sender, inner)
@@ -36,10 +37,18 @@ class Message(Document):
 	
 	def __bytes__(self):
 		return unicode(self).encode('unicode_escape')
-	
+
 	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
+
+	def process(self):
+		self.processed_time = datetime.utcnow()
+		self.save()
+
+	@property
+	def processed(self):
+		return self.processed_time != self.__class__.processed_time.default
 
 
 class Keepalive(Message):
@@ -51,19 +60,7 @@ class Keepalive(Message):
 	pass
 
 
-class ProcessingMessage(Message):
-	processed_time = DateTimeField(db_field='p', default=datetime.fromtimestamp(0))
-
-	def process(self):
-		self.processed_time = datetime.utcnow()
-		self.save()
-
-	@property
-	def processed(self):
-		return self.processed_time != self.__class__.processed_time.default
-
-
-class StopRunner(ProcessingMessage):
+class StopRunner(Message):
 	pass
 
 

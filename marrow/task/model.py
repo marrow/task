@@ -14,7 +14,7 @@ from wrapt.wrappers import FunctionWrapper
 from marrow.package.canonical import name
 from marrow.package.loader import load
 
-from .compat import py2, unicode, range, zip
+from .compat import py2, py33, unicode, range, zip
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
@@ -138,7 +138,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return self.result_iterator()
 
 	def _result_iterator(self):
-		if self.time.completed:
+		if self.done():
 			for item in self.result:
 				yield item
 			raise StopIteration
@@ -153,10 +153,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				if entry.result is not None:
 					yield entry.result
 
-				if py2:
-					raise StopIteration
-				else:
+				if py33:
 					raise StopIteration(entry.result)
+				else:
+					raise StopIteration
 
 			elif entry.status == TaskIterated.FAILED:
 				raise self.exception
@@ -165,7 +165,6 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				yield entry.result
 
 			self.signal(IterationRequest)
-
 
 	def result_iterator(self):
 		"""Iterate the results of a generator task.
@@ -292,7 +291,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			self._invoke_callbacks()
 
 	def handle(self):
-		if self.time.completed:
+		if self.done():
 			return self.task_result
 
 		func = self.callable
@@ -450,7 +449,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		"""Signal the worker pool that it should stop processing after currently executing tasks have completed."""
 		from marrow.task.runner import Runner
 		if isinstance(wait, Runner):
-			wait.interrupt()
+			wait.shutdown()
 			return
 
 		StopRunner.objects.create()

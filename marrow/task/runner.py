@@ -183,7 +183,13 @@ class Runner(object):
 
 	def run(self):
 		for event in self.queryset.tail(timeout=self.timeout):
-			if isinstance(event, StopRunner) and not event.processed:
+			if event.processed:
+				continue
+			event.process()
+
+			print(event.__class__.__name__)
+
+			if isinstance(event, StopRunner):
 				self.logger.info("Runner is stopped")
 				event.process()
 				return
