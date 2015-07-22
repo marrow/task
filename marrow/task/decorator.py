@@ -4,7 +4,7 @@
 
 from inspect import isgeneratorfunction
 from wrapt import decorator
-from datetime import datetime
+from datetime import datetime, timedelta
 from pytz import utc
 import threading
 
@@ -44,13 +44,16 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 		
 		# If handling a fn.every() call...
 		if repeating:
+			td = args[0]
+			if not isinstance(td, timedelta):
+				td = timedelta(seconds=td)
 			try:
-				task.time.frequency = task.time.EPOCH + args[0]
+				task.time.frequency = task.time.EPOCH + td
 			except IndexError:
 				raise TypeError("Must supply timedelta frequency as first argument.")
 			args = args[1:]
 			
-			task.time.scheduled = _absolute_time(kwargs.pop('starts', None))
+			task.time.scheduled = _absolute_time(kwargs.pop('starts', None)) or datetime.now().replace(tzinfo=utc)
 			task.time.until = _absolute_time(kwargs.pop('ends', None))
 		
 		# Or a fn.at() call...

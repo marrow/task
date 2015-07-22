@@ -23,7 +23,7 @@ class Message(Document):
 		)
 	
 	sender = EmbeddedDocumentField(Owner, db_field='s', default=Owner.identity)
-	created = DateTimeField(db_field='w', default=datetime.utcnow)
+	created = DateTimeField(db_field='c', default=datetime.utcnow)
 	processed_time = DateTimeField(db_field='p', default=datetime.fromtimestamp(0))
 
 	def __repr__(self, inner=None):
@@ -43,12 +43,11 @@ class Message(Document):
 		__str__ = __bytes__
 
 	def process(self):
-		self.processed_time = datetime.utcnow()
-		self.save()
+		Message.objects(id=self.id).update(set__processed_time=datetime.utcnow())
 
 	@property
 	def processed(self):
-		return self.processed_time != self.__class__.processed_time.default
+		return Message.objects.scalar('processed_time').get(id=self.id) != self.__class__.processed_time.default
 
 
 class Keepalive(Message):
@@ -140,6 +139,10 @@ class TaskAcquired(TaskMessage):
 	
 	if py3:  # pragma: no cover
 		__str__ = __unicode__
+
+
+class ReschedulePeriodic(TaskMessage):
+	when = DateTimeField(db_field='w')
 
 
 class TaskRetry(TaskMessage):

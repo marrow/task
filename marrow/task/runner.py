@@ -5,7 +5,10 @@ import logging
 import logging.config
 from functools import partial
 from copy import deepcopy
+from datetime import datetime
 
+from pytz import utc
+from apscheduler.schedulers.background import BackgroundScheduler
 from yaml import load
 try:
 	from yaml import CLoader as Loader
@@ -14,15 +17,10 @@ except ImportError:
 from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from marrow.task.message import TaskAdded, Message, StopRunner, IterationRequest, TaskMessage
+from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
+								 TaskScheduled, ReschedulePeriodic)
 from marrow.task.exc import AcquireFailed
 from marrow.task.compat import str, unicode, iterkeys, iteritems
-
-
-# logging.basicConfig()
-
-
-_runners = {}
 
 
 DEFAULT_CONFIG = dict(
@@ -38,6 +36,38 @@ DEFAULT_CONFIG = dict(
 		version = 1,
 	)
 )
+
+
+_runners = {}
+
+_scheduler = BackgroundScheduler(timezone=utc)
+_scheduler.start()
+
+
+def _run_scheduled_job(task_id):
+	print('START SCHEDULED')
+	from marrow.task.model import Task
+	# print(task_id)
+	task = Task.objects.get(id=task_id)
+	task.signal(TaskAdded)
+	# print(Task.objects.get(id=task_id))
+	# print('OLOAKSDAJIBHEJNTKWTGJSDG')
+	# print("FR:", task.time.frequence)
+	if not task.time.frequency:
+	# 	task.signal(TaskAdded)
+		return
+	if task.time.until:
+		if datetime.now().replace(tzinfo=utc) >= task.time.until.replace(tzinfo=utc):
+			return
+	task.signal(ReschedulePeriodic, when=datetime.now().replace(tzinfo=utc))
+	# new_task = task.duplicate()
+	# # date_time = (task.time.scheduled + (task.time.frequence - task.time.EPOCH)).replace(tzinfo=utc)
+	# # import ipdb; ipdb.set_trace()
+	# date_time = task.time.scheduled.replace(tzinfo=utc) + (task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH)
+	# new_task.time.scheduled = date_time
+	# new_task.save()
+	# # print(new_task.id)
+	# new_task.signal(TaskScheduled, when=date_time)
 
 
 class RunningTask(object):
@@ -152,7 +182,6 @@ class Runner(object):
 			return
 		self._connection = connect(**config)
 
-
 	def shutdown(self, wait=None):
 		if not wait:
 			# Shutdown after currently processing task.
@@ -181,6 +210,43 @@ class Runner(object):
 
 		self.queryset.interrupt()
 
+	def schedule_task(self, task, message):
+		from apscheduler.triggers.date import DateTrigger
+		# from apscheduler.triggers.interval import IntervalTrigger
+
+		# if task.time.frequency is None:
+		trigger = DateTrigger(run_date=task.time.scheduled)
+		# else:
+		# 	from pytz import utc
+		# 	delta = task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH
+		# 	trigger = IntervalTrigger(seconds=delta.total_seconds(), start_date=task.time.scheduled, end_date=task.time.until)
+
+		task_id = unicode(task.id)
+		_scheduler.add_job(_run_scheduled_job, trigger=trigger, id=task_id, args=[task_id])
+
+		self.logger.info("%s scheduled at %s" % (task_id, str(trigger)))
+
+	def add_task(self, task, message):
+		if task.acquire() is None:
+			self.logger.warning("Failed to acquire lock on task: %r", task)
+			return
+
+		self.logger.info("Acquired lock on task: %r", task)
+		r = RunningTask(self, task)
+		_runners[unicode(task.id)] = r
+		self.executor.submit(partial(_process_task, unicode(task.id)))
+
+	def iterate_task(self, task, message):
+		runner = _runners.get(unicode(task.id))
+		if runner is not None:
+			runner.next()
+
+	def reschedule_periodic(self, task, message):
+		from marrow.task.model import Task
+		date_time = message.when.replace(tzinfo=utc) + (task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH)
+		Task.objects(id=task.id).update(set__time__scheduled=date_time)
+		task.signal(TaskScheduled, when=date_time)
+
 	def run(self):
 		for event in self.queryset.tail(timeout=self.timeout):
 			if event.processed:
@@ -199,17 +265,14 @@ class Runner(object):
 
 			task = event.task
 
-			if isinstance(event, TaskAdded):
-				if task.acquire() is None:
-					self.logger.warning("Failed to acquire lock on task: %r", task)
-					continue
+			if isinstance(event, TaskScheduled):
+				self.schedule_task(task, event)
 
-				self.logger.info("Acquired lock on task: %r", task)
-				r = RunningTask(self, task)
-				_runners[unicode(task.id)] = r
-				self.executor.submit(partial(_process_task, unicode(task.id)))
+			elif isinstance(event, TaskAdded):
+				self.add_task(task, event)
 
 			elif isinstance(event, IterationRequest):
-				runner = _runners.get(unicode(task.id))
-				if runner is not None:
-					runner.next()
+				self.iterate_task(task, event)
+
+			elif isinstance(event, ReschedulePeriodic):
+				self.reschedule_periodic(task, event)

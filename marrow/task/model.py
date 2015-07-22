@@ -197,14 +197,17 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		pass  # TODO
 	
 	__next__ = next
-	
+
+	def get_messages(self, kind=TaskMessage):
+		return kind.objects(task=self)
+
 	# Marrow Task API
 	
 	@property
 	def messages(self):
 		"""Return a tailable query matching all TaskMessage objects for this task."""
 		
-		return TaskMessage.objects(task=self)
+		return self.get_messages()
 	
 	@property
 	def state(self):
