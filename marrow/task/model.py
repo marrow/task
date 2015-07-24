@@ -50,7 +50,6 @@ def utcnow():
 
 class GeneratorTaskIterator(object):
 	def __init__(self, task, gen):
-		print('GeneratorTaskIterator')
 		self.task = task
 		self.generator = gen
 
@@ -146,9 +145,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		from marrow.task.message import IterationRequest
 
 		self.signal(IterationRequest)
-		print('In iterator')
 		for entry in TaskIterated.objects(task=self).tail():
-			print('Iterated')
 			if entry.status == TaskIterated.FINISHED:
 				if entry.result is not None:
 					yield entry.result

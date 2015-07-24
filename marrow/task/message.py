@@ -24,7 +24,7 @@ class Message(Document):
 	
 	sender = EmbeddedDocumentField(Owner, db_field='s', default=Owner.identity)
 	created = DateTimeField(db_field='c', default=datetime.utcnow)
-	processed_time = DateTimeField(db_field='p', default=datetime.fromtimestamp(0))
+	_processed = BooleanField(db_field='p', default=False)
 
 	def __repr__(self, inner=None):
 		if inner:
@@ -43,11 +43,11 @@ class Message(Document):
 		__str__ = __bytes__
 
 	def process(self):
-		Message.objects(id=self.id).update(set__processed_time=datetime.utcnow())
+		Message.objects(id=self.id).update(set___processed=True)
 
 	@property
 	def processed(self):
-		return Message.objects.scalar('processed_time').get(id=self.id) != self.__class__.processed_time.default
+		return Message.objects.scalar('_processed').get(id=self.id)
 
 
 class Keepalive(Message):
@@ -88,6 +88,10 @@ class TaskAdded(TaskMessage):
 	"""A new task has been added to the queue."""
 	
 	pass  # No additional data is required.
+
+
+class TaskAddedRescheduled(TaskAdded):
+	pass
 
 
 class TaskScheduled(TaskAdded):

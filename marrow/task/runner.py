@@ -1,11 +1,19 @@
 # encoding: utf-8
 
 
+import os
 import logging
 import logging.config
 from functools import partial
 from copy import deepcopy
 from datetime import datetime
+from multiprocessing import Queue
+from multiprocessing.managers import BaseManager, DictProxy
+
+try:
+	import Queue as queue_module
+except ImportError:
+	import queue as queue_module
 
 from pytz import utc
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,8 +26,7 @@ from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
-								 TaskScheduled, ReschedulePeriodic)
-from marrow.task.exc import AcquireFailed
+								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled)
 from marrow.task.compat import str, unicode, iterkeys, iteritems
 
 
@@ -38,96 +45,140 @@ DEFAULT_CONFIG = dict(
 )
 
 
-_runners = {}
+class CustomManager(BaseManager):
+	pass
+
+_tasks_data = {}
+
+_manager = CustomManager()
+_manager.register('dict', dict, DictProxy)
+_manager.register('Queue', Queue)
+
 
 _scheduler = BackgroundScheduler(timezone=utc)
 _scheduler.start()
 
 
+class RunnersStorage(object):
+	def __init__(self):
+		self._runners = _manager.dict()
+
+	def __getitem__(self, item):
+		return self._runners[item]
+
+	def __setitem__(self, key, value):
+		self._runners[key] = value
+
+	def __delitem__(self, key):
+		del self._runners[key]
+
+	def get(self, key, default_value=None):
+		return self._runners.get(key, default_value)
+
+
 def _run_scheduled_job(task_id):
-	print('START SCHEDULED')
 	from marrow.task.model import Task
-	# print(task_id)
+
 	task = Task.objects.get(id=task_id)
 	task.signal(TaskAdded)
-	# print(Task.objects.get(id=task_id))
-	# print('OLOAKSDAJIBHEJNTKWTGJSDG')
-	# print("FR:", task.time.frequence)
+
 	if not task.time.frequency:
-	# 	task.signal(TaskAdded)
 		return
+
 	if task.time.until:
 		if datetime.now().replace(tzinfo=utc) >= task.time.until.replace(tzinfo=utc):
 			return
+
 	task.signal(ReschedulePeriodic, when=datetime.now().replace(tzinfo=utc))
-	# new_task = task.duplicate()
-	# # date_time = (task.time.scheduled + (task.time.frequence - task.time.EPOCH)).replace(tzinfo=utc)
-	# # import ipdb; ipdb.set_trace()
-	# date_time = task.time.scheduled.replace(tzinfo=utc) + (task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH)
-	# new_task.time.scheduled = date_time
-	# new_task.save()
-	# # print(new_task.id)
-	# new_task.signal(TaskScheduled, when=date_time)
 
 
 class RunningTask(object):
-	def __init__(self, runner, task):
-		self.runner = runner
-		self.task = task
+	def __init__(self, task_id):
+		self.task_id = task_id
 
-	def handle(self):
-		print('RUNNER RUNNING')
+	def handle_task(self):
 		from marrow.task import task as task_decorator
 
-		if not self.task.set_running_or_notify_cancel():
+		task = self.get_task()
+
+		if not task.set_running_or_notify_cancel():
 			return
 
-		func = self.task.callable
+		func = task.callable
 		if not hasattr(func, 'context'):
 			func = task_decorator(func)
 
-		context = self.get_context(self.task)
+		context = self.get_context(task)
 		for key, value in iteritems(context):
 			setattr(func.context, key, value)
 
 		result = None
 		try:
-			result = self.task.handle()
+			result = task.handle()
 		except Exception:
-			self.runner.logger.warning('Failed: %r', self.task)
-		else:
-			self.runner.logger.info('Completed: %r', self.task)
+			# self.runner.logger.warning('Failed: %r', task)
+			pass
+		# else:
+		# 	self.runner.logger.info('Completed: %r', task)
 
-		# import ipdb; ipdb.set_trace()
-		# TODO: Not sure that it should be made that way.
-		from marrow.task.model import GeneratorTaskIterator
-		if isinstance(result, GeneratorTaskIterator):
-			_runners[unicode(self.task.id)] = RunningGenerator(result)
-			return
+		return result
 
-		del _runners[unicode(self.task.id)]
+	def handle(self):
+		self.handle_task()
+		del _runners[self.task_id]
 
 	def get_context(self, task):
 		return dict(
 			id = task.id,
 		)
 
+	def get_task(self):
+		from marrow.task.model import Task
+		return Task.objects.get(id=self.task_id)
 
-class RunningGenerator(object):
-	def __init__(self, iterator):
-		self.iterator = iterator
-
-	def next(self):
-		try:
-			next(self.iterator)
-		except StopIteration:
-			del _runners[unicode(self.iterator.task.id)]
-		else:
-			self.iterator.task._invoke_callbacks()
+_manager.register('RunningTask', RunningTask)
 
 
-def _process_task(task_id):
-	_runners[task_id].handle()
+class RunningRescheduled(RunningTask):
+	def handle(self):
+		from marrow.task.model import Task
+		Task.objects(id=self.task_id).update(set__time__completed=None)
+		return super(RunningRescheduled, self).handle()
+
+_manager.register('RunningRescheduled', RunningRescheduled)
+
+
+class RunningGenerator(RunningTask):
+	def handle(self):
+		generator = self.handle_task()
+		task = self.get_task()
+		for event in IterationRequest.objects(task=self.task_id).tail():
+			try:
+				next(generator)
+			except StopIteration:
+				del _runners[self.task_id]
+				break
+			else:
+				task._invoke_callbacks()
+
+_manager.register('RunningGenerator', RunningGenerator)
+
+
+_manager.start()
+
+_runners = RunnersStorage()
+
+
+def _process_task(task_id, errors_queue=None):
+	try:
+		_runners[task_id].handle()
+	except Exception:
+		if not errors_queue:
+			return
+		import sys, traceback
+		exc_type, exc_val, tb = sys.exc_info()
+		tb = ''.join(traceback.format_tb(tb))
+		errors_queue.put((exc_type, exc_val, tb, task_id))
 
 
 class Runner(object):
@@ -150,6 +201,7 @@ class Runner(object):
 		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)
 		self.queryset = Message.objects
+		self.errors = _manager.Queue()
 
 	def _get_config(self, config):
 		base = deepcopy(DEFAULT_CONFIG)
@@ -212,15 +264,8 @@ class Runner(object):
 
 	def schedule_task(self, task, message):
 		from apscheduler.triggers.date import DateTrigger
-		# from apscheduler.triggers.interval import IntervalTrigger
 
-		# if task.time.frequency is None:
 		trigger = DateTrigger(run_date=task.time.scheduled)
-		# else:
-		# 	from pytz import utc
-		# 	delta = task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH
-		# 	trigger = IntervalTrigger(seconds=delta.total_seconds(), start_date=task.time.scheduled, end_date=task.time.until)
-
 		task_id = unicode(task.id)
 		_scheduler.add_job(_run_scheduled_job, trigger=trigger, id=task_id, args=[task_id])
 
@@ -232,28 +277,41 @@ class Runner(object):
 			return
 
 		self.logger.info("Acquired lock on task: %r", task)
-		r = RunningTask(self, task)
-		_runners[unicode(task.id)] = r
-		self.executor.submit(partial(_process_task, unicode(task.id)))
-
-	def iterate_task(self, task, message):
-		runner = _runners.get(unicode(task.id))
-		if runner is not None:
-			runner.next()
+		if isinstance(message, TaskAddedRescheduled):
+			runner_class = RunningRescheduled
+		else:
+			if task.generator:
+				runner_class = RunningGenerator
+			else:
+				runner_class = RunningTask
+		runner = getattr(_manager, runner_class.__name__)(unicode(task.id))
+		_runners[unicode(task.id)] = runner
+		self.executor.submit(partial(_process_task, unicode(task.id), self.errors))
 
 	def reschedule_periodic(self, task, message):
 		from marrow.task.model import Task
 		date_time = message.when.replace(tzinfo=utc) + (task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH)
-		Task.objects(id=task.id).update(set__time__scheduled=date_time)
+		Task.objects(id=task.id).update(set__time__scheduled=date_time, set__time__acquired=None, set__owner=None)
 		task.signal(TaskScheduled, when=date_time)
 
 	def run(self):
 		for event in self.queryset.tail(timeout=self.timeout):
+			while True:
+				try:
+					exc_type, exc_val, tb, task_id = self.errors.get(False)
+				except queue_module.Empty:
+					break
+				error_msg = '%s(%s) in task %s:\n%s' % (exc_type.__name__, str(exc_val), task_id, tb)
+				self.logger.exception(error_msg)
+
 			if event.processed:
 				continue
 			event.process()
 
-			print(event.__class__.__name__)
+			msg = 'Process %s' % event.__class__.__name__
+			if isinstance(event, TaskMessage):
+				msg += ' for %s' % event.task.id
+			self.logger.info(msg)
 
 			if isinstance(event, StopRunner):
 				self.logger.info("Runner is stopped")
@@ -265,14 +323,8 @@ class Runner(object):
 
 			task = event.task
 
-			if isinstance(event, TaskScheduled):
-				self.schedule_task(task, event)
-
-			elif isinstance(event, TaskAdded):
-				self.add_task(task, event)
-
-			elif isinstance(event, IterationRequest):
-				self.iterate_task(task, event)
-
-			elif isinstance(event, ReschedulePeriodic):
-				self.reschedule_periodic(task, event)
+			{
+				TaskScheduled: self.schedule_task,
+				TaskAdded: self.add_task,
+				ReschedulePeriodic: self.reschedule_periodic
+			}.get(event.__class__, lambda task, event: None)(task, event)
