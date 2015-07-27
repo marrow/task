@@ -2,6 +2,7 @@
 
 
 import os
+import pickle
 import logging
 import logging.config
 from functools import partial
@@ -61,19 +62,28 @@ _scheduler.start()
 
 class RunnersStorage(object):
 	def __init__(self):
-		self._runners = _manager.dict()
+		self._runners = {}#_manager.dict()
 
 	def __getitem__(self, item):
 		return self._runners[item]
 
 	def __setitem__(self, key, value):
-		self._runners[key] = value
+		data = self._runners
+		data[key] = value
+		self._runners = data
 
 	def __delitem__(self, key):
-		del self._runners[key]
+		data = self._runners
+		del data[key]
+		self._runners = data
 
 	def get(self, key, default_value=None):
 		return self._runners.get(key, default_value)
+
+	def get_data(self):
+		return self._runners
+
+_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
 
 
 def _run_scheduled_job(task_id):
@@ -136,16 +146,12 @@ class RunningTask(object):
 		from marrow.task.model import Task
 		return Task.objects.get(id=self.task_id)
 
-_manager.register('RunningTask', RunningTask)
-
 
 class RunningRescheduled(RunningTask):
 	def handle(self):
 		from marrow.task.model import Task
 		Task.objects(id=self.task_id).update(set__time__completed=None)
 		return super(RunningRescheduled, self).handle()
-
-_manager.register('RunningRescheduled', RunningRescheduled)
 
 
 class RunningGenerator(RunningTask):
@@ -161,17 +167,16 @@ class RunningGenerator(RunningTask):
 			else:
 				task._invoke_callbacks()
 
-_manager.register('RunningGenerator', RunningGenerator)
-
 
 _manager.start()
 
-_runners = RunnersStorage()
+_runners = _manager.RunnersStorage()
 
 
 def _process_task(task_id, errors_queue=None):
+
 	try:
-		_runners[task_id].handle()
+		pickle.loads(_runners[task_id]).handle()
 	except Exception:
 		if not errors_queue:
 			return
@@ -203,7 +208,8 @@ class Runner(object):
 		self.queryset = Message.objects
 		self.errors = _manager.Queue()
 
-	def _get_config(self, config):
+	@staticmethod
+	def _get_config(config):
 		base = deepcopy(DEFAULT_CONFIG)
 
 		if config is None:
@@ -284,8 +290,9 @@ class Runner(object):
 				runner_class = RunningGenerator
 			else:
 				runner_class = RunningTask
-		runner = getattr(_manager, runner_class.__name__)(unicode(task.id))
-		_runners[unicode(task.id)] = runner
+		runner = runner_class(unicode(task.id))
+		# Use explicit pickling because of Python 3
+		_runners[unicode(task.id)] = pickle.dumps(runner)
 		self.executor.submit(partial(_process_task, unicode(task.id), self.errors))
 
 	def reschedule_periodic(self, task, message):

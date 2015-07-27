@@ -298,8 +298,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if isinstance(func, FunctionWrapper):
 			func = func.call
 
+		if self.reference:
+			from functools import partial
+			func = partial(func, self.reference)
+
 		result = None
-		# Task.objects(id=self.id).update(set__time__executed=utcnow())
 
 		try:
 			result = func(*self.args, **self.kwargs)

@@ -40,8 +40,17 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 		# Allow calling bound methods of Document sub-classes.
 		if isinstance(instance, Document):
 			# TODO: Check that this instance has a pk and has been saved!
+			exc = ValueError('Model instance must be a saved')
+			if instance.pk is None:
+				raise exc
+			cls = instance.__class__
+			try:
+				cls.objects.get(**{cls._fields[cls._meta['id_field']].name: instance.pk})
+			except Exception:
+				raise exc
+			# task.reference = {'cls': instance._get_collection_name(), 'idx': unicode(instance.id)}
 			task.reference = instance
-		
+
 		# If handling a fn.every() call...
 		if repeating:
 			td = args[0]
@@ -90,13 +99,13 @@ def task(_fn=None, defer=False):
 		generator = isgeneratorfunction(fn)
 
 		if not hasattr(fn, 'context'):
-			fn.context = threading.local()
+			fn.__dict__['context'] = threading.local()
 			fn.context.id = None
 		
-		fn.call = immediate = _decorate_task(False, generator)(fn)
-		fn.defer = deferred = _decorate_task(True, generator)(fn)
-		fn.at = _decorate_task(True, generator, scheduled=True)(fn)
-		fn.every = _decorate_task(True, generator, repeating=True)(fn)
+		fn.__dict__['call'] = immediate = _decorate_task(False, generator)(fn)
+		fn.__dict__['defer'] = deferred = _decorate_task(True, generator)(fn)
+		fn.__dict__['at'] = _decorate_task(True, generator, scheduled=True)(fn)
+		fn.__dict__['every'] = _decorate_task(True, generator, repeating=True)(fn)
 
 		return deferred if defer else immediate
 	

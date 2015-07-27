@@ -5,11 +5,19 @@ from __future__ import unicode_literals, print_function
 import threading
 
 import pytest
+from mongoengine import Document, IntField
 
 from marrow.task import task as task_decorator
 from marrow.task import Task
 from marrow.task.runner import Runner
 from marrow.task.compat import range, py2, py33
+
+
+class TestModel(Document):
+	data_field = IntField()
+
+	def method(self, arg):
+		return self.data_field * arg
 
 
 @task_decorator
@@ -62,10 +70,12 @@ def exception_subject():
 	raise AttributeError('FAILURE')
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope='function', params=['thread', 'process'], ids=['thread', 'process'])
 def runner(request, connection):
-	runner = Runner('./example/config.yaml')
-	runner.timeout = 10
+	config = Runner._get_config('./example/config.yaml')
+	config['runner']['use'] = request.param
+	config['runner']['timeout'] = 10
+	runner = Runner(config)
 	th = threading.Thread(target=runner.run)
 
 	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
@@ -227,3 +237,9 @@ class TestTasks(object):
 
 		assert task.release() is None
 		assert isinstance(task.release(force=True), Task)
+
+	def test_instance_method(self, runner):
+		instance = TestModel.objects.create(data_field=42)
+		task = task_decorator(instance.method).defer(2)
+		assert task.result == 84
+		runner.stop_test_runner()

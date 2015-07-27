@@ -17,55 +17,36 @@ connect('mtask')
 
 
 @task
-def test(a):
+def test(a, carg=None):
 	print('Jesus')
-	import time
-	time.sleep(5)
+	# import time
+	# time.sleep(5)
 	return 42 * a
 
-def stop_runner():
-	import time; time.sleep(10)
-	runner.interrupt()
 
-def test_concurrency():
-	with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-		for i in xrange(10):
-			t = hello.defer('Jesus-%s' % i)
-			ex.submit(t.handle)
+# if not Task.objects:
+#t = test.defer(2)
+#print('>>> TASK: %s' % t.id)
 
-@task
-def test_task(ta):
-    return ta
+# t = list(Task.objects)[-1]
 
-@task
-def test_map(god):
-	return 'Hail, %s!' % god
-
-gods = ['Baldur', 'Bragi', 'Eostre', 'Hermodur']
-
-from mongoengine import Document
-
-class TT(Document):
-	def __iter__(self):
-		raise AttributeError('Jesus')
-
-	def save(self):
-		return self.t()
-
-	def t(self):
-		import inspect
-		return inspect.stack()[1]
-
-@task
-def test_exc():
-	t = TT()
-	for i in t:
-		return
-
-
-if not Task.objects:
-	test.defer(2)
-
-t = list(Task.objects)[-1]
-
+import threading
 runner = Runner('./example/config.yaml')
+
+th = threading.Thread(target=runner.run)
+
+# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
+# Add it as finalizer for same at failures.
+def stop(wait=None):
+	runner.shutdown(wait)
+	th.join()
+
+runner.stop_test_runner = stop
+# request.addfinalizer(stop)
+
+#th.start()
+t = test.defer(42).result
+#runner.stop_test_runner()
+# return runner
+
+#runner.run()
