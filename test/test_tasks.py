@@ -3,6 +3,7 @@
 from __future__ import unicode_literals, print_function
 
 import threading
+from multiprocessing import Manager
 
 import pytest
 from mongoengine import Document, IntField
@@ -42,6 +43,7 @@ def generator_subject(fail=False, exc_val=None):
 
 @task_decorator
 def map_subject(god):
+	print('HAIL ' + god)
 	return "Hail, %s!" % god
 
 
@@ -51,13 +53,17 @@ def sleep_subject(a):
 	time.sleep(1)
 	return a
 
+_manager = Manager()
+callback_count = _manager.Value('i', 0)
+
 
 def task_callback(task):
+	global callback_count
+
 	result = "Callback for %s" % task.id
 	print(result)
-	task_callback.count += 1
+	callback_count.value += 1
 	return result
-task_callback.count = 0
 
 
 @task_decorator
@@ -68,6 +74,15 @@ def context_subject():
 @task_decorator
 def exception_subject():
 	raise AttributeError('FAILURE')
+
+
+every_count = _manager.Value('i', 0)
+
+
+@task_decorator
+def every_subject():
+	every_count.value += 1
+	return every_count.value
 
 
 @pytest.fixture(scope='function', params=['thread', 'process'], ids=['thread', 'process'])
@@ -81,11 +96,12 @@ def runner(request, connection):
 	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
 	# Add it as finalizer for same at failures.
 	def stop(wait=None):
-		runner.shutdown(wait)
+		# import ipdb; ipdb.set_trace()
+		# runner.shutdown(True)
 		th.join()
 
 	runner.stop_test_runner = stop
-	request.addfinalizer(stop)
+	# request.addfinalizer(stop)
 
 	th.start()
 	return runner
@@ -95,10 +111,8 @@ def runner(request, connection):
 def task(request, connection):
 	t = subject.defer(4)
 	t.reload()
-	print("Task created: %s" % t.id)
 
 	def finalizer():
-		print('DELETED')
 		Task.objects(id=t.id).delete()
 
 	request.addfinalizer(finalizer)
@@ -193,16 +207,16 @@ class TestTasks(object):
 		result = Task.map(sleep_subject, data, timeout=1)
 		with pytest.raises(TimeoutError):
 			list(result)
-		runner.stop_test_runner(3)
+		runner.stop_test_runner(True)
 
 	def test_callback(self, runner):
+		callback_count.value = 0
 		task = sleep_subject.defer(42)
-		assert task_callback.count == 0
 		task.add_done_callback(task_callback)
 		assert_task(task)
 		import time
 		time.sleep(1)
-		assert task_callback.count == 1
+		assert callback_count.value == 1
 		runner.stop_test_runner()
 
 	def test_context(self, runner):
@@ -242,4 +256,41 @@ class TestTasks(object):
 		instance = TestModel.objects.create(data_field=42)
 		task = task_decorator(instance.method).defer(2)
 		assert task.result == 84
+		runner.stop_test_runner()
+
+	def test_at_invocation(self, runner):
+		from datetime import datetime, timedelta
+		import time
+
+		dt = datetime.now() + timedelta(seconds=5)
+		task = subject.at(dt, 2)
+		start = time.time()
+		assert task.result == 84
+		assert time.time() - start >= 5
+		runner.stop_test_runner()
+
+	def test_every_invocation(self, runner):
+		every_count.value = 0
+		task = every_subject.every(3)
+		for i in range(1, 4):
+			import time; time.sleep(3)
+			assert task.result == i
+		runner.stop_test_runner()
+
+	def test_every_invocation_start_until(self, runner):
+		from datetime import datetime, timedelta
+		import time
+
+		every_count.value = 0
+		start = datetime.now() + timedelta(seconds=5)
+		end = start + timedelta(seconds=6)
+		total_start = time.time()
+		task = every_subject.every(2, starts=start, ends=end)
+		iterations = int((end - start).total_seconds() // 2)
+		for i in range(1, iterations):
+			iteration_start = time.time()
+			time.sleep(2.2)
+			assert task.result == i
+			assert time.time() - iteration_start >= 2
+		assert time.time() - total_start >= iterations * 2
 		runner.stop_test_runner()

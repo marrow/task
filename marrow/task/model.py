@@ -57,19 +57,16 @@ class GeneratorTaskIterator(object):
 		return self
 
 	def next(self):
-		print("CALLED")
 		try:
 			item = next(self.generator)
 
 		except StopIteration as exception:
-			print('STOPPED')
 			value = getattr(exception, 'value', None)
 			self.task.signal(TaskIterated, status=TaskIterated.FINISHED, result=value)
 			self.task._complete_task()
 			raise
 
 		except Exception as exception:
-			print('EXCEPTION')
 			exc = self.task.set_exception(exception)
 			self.task.signal(TaskIterated, status=TaskIterated.FAILED, result=exc)
 			self.task._complete_task()
@@ -137,7 +134,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return self.result_iterator()
 
 	def _result_iterator(self):
-		if self.done():
+		if self.done:
 			for item in self.result:
 				yield item
 			raise StopIteration
@@ -254,19 +251,18 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	@property
 	def result(self, timeout=None):
-		if not self.time.completed:
+		if not self.done:
 			self.wait(timeout)
 
-		if self.task_exception:
+		result, exception = Task.objects.scalar('task_result', 'task_exception').get(id=self.id)
+		if exception:
 			raise self.exception
 
-		return self.task_result
+		return result
 
 	@property
 	def exception_info(self):
-		if (self.task_exception is None) and (self.task_result is None):
-			self.reload()
-		exc = self.task_exception
+		exc = Task.objects.scalar('task_exception').get(id=self.id)
 		if exc is None:
 			return None, None
 		return decode(exc['exception']), exc['traceback']
@@ -291,7 +287,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			self._invoke_callbacks()
 
 	def handle(self):
-		if self.done():
+		if self.done:
 			return self.task_result
 
 		func = self.callable
@@ -322,7 +318,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def add_done_callback(self, callback):
 		from marrow.task import task
 
-		if self.done() or self.cancelled():
+		if self.done or self.cancelled:
 			task(callback).defer(self)
 			return
 
@@ -343,9 +339,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Futures-compatible pseudo-internal API.
 	
 	def set_running_or_notify_cancel(self):
-		if self.cancelled():
+		if self.cancelled:
 			return False
-		if self.state == 'acquired':
+		if self.acquired:
 			Task.objects(id=self.id).update(set__time__executed=utcnow())
 			return True
 		raise RuntimeError('Task in unexpected state')
@@ -435,7 +431,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 				try:
 					if timeout is None:
-						yield task.wait().result
+						yield task.result
 					else:
 						yield task.wait(timeout=end_time - time.time()).result
 				except TimeoutError as exc:
@@ -506,14 +502,17 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def waiting(self):
 		return bool(Task.objects.accepted(id=self.id).count())
 
+	@property
 	def cancelled(self):
-		"""Return Ture if the task has been cancelled."""
+		"""Return True if the task has been cancelled."""
 		return bool(Task.objects.cancelled(id=self.id).count())
-	
+
+	@property
 	def running(self):
 		"""Return True if the task is currently executing."""
 		return bool(Task.objects.running(id=self.id).count())
-	
+
+	@property
 	def done(self):
 		"""Return True if the task was cancelled or finished executing."""
 		return bool(Task.objects.finished(id=self.id).count())
@@ -525,3 +524,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	@property
 	def failed(self):
 		return bool(Task.objects.failed(id=self.id).count())
+
+	@property
+	def acquired(self):
+		return bool(Task.objects(id=self.id, time__acquired__ne=None).count())

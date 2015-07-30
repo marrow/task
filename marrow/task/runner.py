@@ -1,6 +1,5 @@
 # encoding: utf-8
 
-
 import os
 import pickle
 import logging
@@ -9,7 +8,8 @@ from functools import partial
 from copy import deepcopy
 from datetime import datetime
 from multiprocessing import Queue
-from multiprocessing.managers import BaseManager, DictProxy
+from multiprocessing.managers import BaseManager, DictProxy, Value, ValueProxy, AcquirerProxy
+from threading import RLock
 
 try:
 	import Queue as queue_module
@@ -19,10 +19,12 @@ except ImportError:
 from pytz import utc
 from apscheduler.schedulers.background import BackgroundScheduler
 from yaml import load
+
 try:
 	from yaml import CLoader as Loader
 except ImportError:
 	from yaml import Loader
+
 from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
@@ -54,6 +56,7 @@ _tasks_data = {}
 _manager = CustomManager()
 _manager.register('dict', dict, DictProxy)
 _manager.register('Queue', Queue)
+_manager.register('RLock', RLock, AcquirerProxy)
 
 
 _scheduler = BackgroundScheduler(timezone=utc)
@@ -86,11 +89,11 @@ class RunnersStorage(object):
 _manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
 
 
-def _run_scheduled_job(task_id):
+def _run_periodic_task(task_id):
 	from marrow.task.model import Task
 
 	task = Task.objects.get(id=task_id)
-	task.signal(TaskAdded)
+	task.signal(TaskAddedRescheduled)
 
 	if not task.time.frequency:
 		return
@@ -100,6 +103,23 @@ def _run_scheduled_job(task_id):
 			return
 
 	task.signal(ReschedulePeriodic, when=datetime.now().replace(tzinfo=utc))
+
+
+class RunStatus(object):
+	def __init__(self, kind, data=None):
+		self.kind = kind
+		self.data = data
+
+	def __repr__(self):
+		if self.data is None:
+			return self.kind
+		return '%s: [%s]' % (self.kind, self.data)
+
+
+SUCCESS = 'SUCCESS'
+FAILURE = 'FAILURE'
+EXCEPTION = 'EXCEPTION'
+RUNNER_EXCEPTION = 'RUNNER_EXCEPTION'
 
 
 class RunningTask(object):
@@ -112,7 +132,7 @@ class RunningTask(object):
 		task = self.get_task()
 
 		if not task.set_running_or_notify_cancel():
-			return
+			return RunStatus(FAILURE)
 
 		func = task.callable
 		if not hasattr(func, 'context'):
@@ -125,17 +145,23 @@ class RunningTask(object):
 		result = None
 		try:
 			result = task.handle()
-		except Exception:
-			# self.runner.logger.warning('Failed: %r', task)
-			pass
-		# else:
-		# 	self.runner.logger.info('Completed: %r', task)
+		except Exception as exc:
+			import sys, traceback
+			from marrow.task.exc import TimeoutError
 
-		return result
+			exc_type, exc_val, tb = sys.exc_info()
+			tb = ''.join(traceback.format_tb(tb))
+			exc = (exc_type, exc_val, tb)
+
+			if task.exception is None:
+				return RunStatus(RUNNER_EXCEPTION, exc)
+			return RunStatus(EXCEPTION, exc)
+
+		return RunStatus(SUCCESS, result)
 
 	def handle(self):
-		self.handle_task()
 		del _runners[self.task_id]
+		return self.handle_task()
 
 	def get_context(self, task):
 		return dict(
@@ -156,7 +182,7 @@ class RunningRescheduled(RunningTask):
 
 class RunningGenerator(RunningTask):
 	def handle(self):
-		generator = self.handle_task()
+		generator = self.handle_task().data
 		task = self.get_task()
 		for event in IterationRequest.objects(task=self.task_id).tail():
 			try:
@@ -168,22 +194,24 @@ class RunningGenerator(RunningTask):
 				task._invoke_callbacks()
 
 
+_manager.register('Value', Value, ValueProxy)
 _manager.start()
 
 _runners = _manager.RunnersStorage()
 
+def _process_task(task_id, message_queue=None):
+	runner = pickle.loads(_runners[task_id])
+	result = runner.handle()
 
-def _process_task(task_id, errors_queue=None):
+	if message_queue is None:
+		return
 
-	try:
-		pickle.loads(_runners[task_id]).handle()
-	except Exception:
-		if not errors_queue:
-			return
-		import sys, traceback
-		exc_type, exc_val, tb = sys.exc_info()
-		tb = ''.join(traceback.format_tb(tb))
-		errors_queue.put((exc_type, exc_val, tb, task_id))
+	if result.kind in (EXCEPTION, RUNNER_EXCEPTION):
+		exc_type, exc_val, tb = result.data
+		message_queue.put((exc_type, exc_val, tb, task_id, result.kind))
+
+	else:
+		message_queue.put((result.kind, task_id))
 
 
 class Runner(object):
@@ -241,31 +269,7 @@ class Runner(object):
 		self._connection = connect(**config)
 
 	def shutdown(self, wait=None):
-		if not wait:
-			# Shutdown after currently processing task.
-			self.queryset.interrupt()
-			self.logger.info('Runner is interrupted')
-			return
-
-		if wait is True:
-			# Shutdown after all tasks that added before this call.
-			StopRunner.objects.create()
-			self.logger.info('Runner finishing work')
-			return
-
-		# Wait until no new messages added for `wait` seconds.
-		import time
-
-		last = Message.objects.count()
-		end_time = time.time() + wait
-
-		self.logger.info('Runner waiting for end of messages')
-		while time.time() < end_time:
-			count = Message.objects.count()
-			if count > last:
-				last = count
-				end_time = time.time() + wait
-
+		self.executor.shutdown(wait)
 		self.queryset.interrupt()
 
 	def schedule_task(self, task, message):
@@ -273,16 +277,16 @@ class Runner(object):
 
 		trigger = DateTrigger(run_date=task.time.scheduled)
 		task_id = unicode(task.id)
-		_scheduler.add_job(_run_scheduled_job, trigger=trigger, id=task_id, args=[task_id])
+		_scheduler.add_job(_run_periodic_task, trigger=trigger, id=task_id, args=[task_id])
 
-		self.logger.info("%s scheduled at %s" % (task_id, str(trigger)))
+		self.logger.info('%s scheduled at %s' % (task_id, trigger))
 
 	def add_task(self, task, message):
 		if task.acquire() is None:
-			self.logger.warning("Failed to acquire lock on task: %r", task)
+			self.logger.warning('Failed to acquire lock on task: %r', task)
 			return
 
-		self.logger.info("Acquired lock on task: %r", task)
+		self.logger.info('Acquired lock on task: %r', task)
 		if isinstance(message, TaskAddedRescheduled):
 			runner_class = RunningRescheduled
 		else:
@@ -290,10 +294,15 @@ class Runner(object):
 				runner_class = RunningGenerator
 			else:
 				runner_class = RunningTask
-		runner = runner_class(unicode(task.id))
+
+		task_id = unicode(task.id)
+		runner = runner_class(task_id)
 		# Use explicit pickling because of Python 3
-		_runners[unicode(task.id)] = pickle.dumps(runner)
-		self.executor.submit(partial(_process_task, unicode(task.id), self.errors))
+		_runners[task_id] = pickle.dumps(runner)
+		try:
+			self.executor.submit(partial(_process_task, task_id, self.errors))
+		except RuntimeError:
+			return False
 
 	def reschedule_periodic(self, task, message):
 		from marrow.task.model import Task
@@ -305,10 +314,22 @@ class Runner(object):
 		for event in self.queryset.tail(timeout=self.timeout):
 			while True:
 				try:
-					exc_type, exc_val, tb, task_id = self.errors.get(False)
+					data = self.errors.get(False)
 				except queue_module.Empty:
 					break
-				error_msg = '%s(%s) in task %s:\n%s' % (exc_type.__name__, str(exc_val), task_id, tb)
+
+				if len(data) == 2:
+					if data[0] == SUCCESS:
+						self.logger.info('Completed: %s', data[1])
+					elif data[1] == FAILURE:
+						self.logger.info('Failed: %s', data[1])
+					continue
+
+				exc_type, exc_val, tb, task_id, exc_kind = data
+				error_msg = '%s(%s) in %stask %s:\n%s' % (
+					exc_type.__name__, exc_val,
+					'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
+					task_id, tb)
 				self.logger.exception(error_msg)
 
 			if event.processed:
@@ -321,7 +342,7 @@ class Runner(object):
 			self.logger.info(msg)
 
 			if isinstance(event, StopRunner):
-				self.logger.info("Runner is stopped")
+				self.logger.info('Runner is stopped')
 				event.process()
 				return
 
@@ -330,8 +351,14 @@ class Runner(object):
 
 			task = event.task
 
-			{
+			handler = {
 				TaskScheduled: self.schedule_task,
 				TaskAdded: self.add_task,
+				TaskAddedRescheduled: self.add_task,
 				ReschedulePeriodic: self.reschedule_periodic
-			}.get(event.__class__, lambda task, event: None)(task, event)
+			}.get(event.__class__, lambda task, event: None)
+
+			if handler(task, event) is False:
+				break
+
+		self.shutdown(False)
