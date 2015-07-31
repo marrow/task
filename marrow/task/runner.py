@@ -8,8 +8,8 @@ from functools import partial
 from copy import deepcopy
 from datetime import datetime
 from multiprocessing import Queue
-from multiprocessing.managers import BaseManager, DictProxy, Value, ValueProxy, AcquirerProxy
-from threading import RLock
+from multiprocessing.managers import BaseManager, DictProxy, Value, ValueProxy, AcquirerProxy, ListProxy
+from threading import RLock, current_thread, Thread
 
 try:
 	import Queue as queue_module
@@ -54,18 +54,12 @@ class CustomManager(BaseManager):
 _tasks_data = {}
 
 _manager = CustomManager()
-_manager.register('dict', dict, DictProxy)
 _manager.register('Queue', Queue)
-_manager.register('RLock', RLock, AcquirerProxy)
-
-
-_scheduler = BackgroundScheduler(timezone=utc)
-_scheduler.start()
 
 
 class RunnersStorage(object):
 	def __init__(self):
-		self._runners = {}#_manager.dict()
+		self._runners = {}
 
 	def __getitem__(self, item):
 		return self._runners[item]
@@ -199,6 +193,7 @@ _manager.start()
 
 _runners = _manager.RunnersStorage()
 
+
 def _process_task(task_id, message_queue=None):
 	runner = pickle.loads(_runners[task_id])
 	result = runner.handle()
@@ -233,8 +228,48 @@ class Runner(object):
 		# Get first logger name from config or class name.
 		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)
-		self.queryset = Message.objects
-		self.errors = _manager.Queue()
+		# self.queryset = Message.objects
+
+		self.message_queue = _manager.Queue()
+		self.message_thread = None
+
+	def run(self):
+		def _handle_messages():
+			while True:
+				try:
+					data = self.message_queue.get(True)
+				except IOError:
+					return
+				# 	continue
+
+				if data is None:
+					return
+
+				if isinstance(data, (str, unicode)):
+					self.logger.info(data)
+					continue
+
+				if len(data) == 2:
+					if data[0] == SUCCESS:
+						self.logger.info('Completed: %s', data[1])
+
+					elif data[1] == FAILURE:
+						self.logger.warning('Failed: %s', data[1])
+
+					continue
+
+				exc_type, exc_val, tb, task_id, exc_kind = data
+				error_msg = '%s(%s) in %stask %s:\n%s' % (
+					exc_type.__name__, exc_val,
+					'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
+					task_id, tb)
+				self.logger.exception(error_msg)
+
+		self.message_thread = Thread(target=_handle_messages)
+		self.message_thread.start()
+
+		for i in range(self.executor._max_workers):
+			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue)
 
 	@staticmethod
 	def _get_config(config):
@@ -268,25 +303,51 @@ class Runner(object):
 			return
 		self._connection = connect(**config)
 
-	def shutdown(self, wait=None):
-		self.executor.shutdown(wait)
-		self.queryset.interrupt()
+	def get_alive_workers_count(self):
+		try:
+			workers = self.executor._threads
+		except AttributeError:
+			workers = self.executor._processes
 
-	def schedule_task(self, task, message):
+		if not workers:
+			return 0
+
+		return sum(worker.is_alive() for worker in workers)
+
+	def shutdown(self, wait=None):
+		for i in range(self.get_alive_workers_count()):
+			StopRunner.objects.create()
+		self.executor.shutdown(wait)
+		try:
+			self.message_queue.put(None)
+		except Exception:
+			pass
+		self.message_queue.close()
+		self.message_queue.join_thread()
+		self.message_thread.join()
+		# self.queryset.interrupt()
+		self.logger.info("SHUTDOWN")
+
+
+def run(timeout=None, message_queue=None):
+	scheduler = BackgroundScheduler(timezone=utc)
+	scheduler.start()
+
+	def schedule_task(task, message):
 		from apscheduler.triggers.date import DateTrigger
 
 		trigger = DateTrigger(run_date=task.time.scheduled)
 		task_id = unicode(task.id)
-		_scheduler.add_job(_run_periodic_task, trigger=trigger, id=task_id, args=[task_id])
+		scheduler.add_job(_run_periodic_task, trigger=trigger, id=task_id, args=[task_id])
 
-		self.logger.info('%s scheduled at %s' % (task_id, trigger))
+		message_queue.put('%s scheduled at %s' % (task_id, trigger))
 
-	def add_task(self, task, message):
+	def add_task(task, message):
 		if task.acquire() is None:
-			self.logger.warning('Failed to acquire lock on task: %r', task)
+			message_queue.put('Failed to acquire lock on task: %r' % task)
 			return
 
-		self.logger.info('Acquired lock on task: %r', task)
+		message_queue.put('Acquired lock on task: %r' % task)
 		if isinstance(message, TaskAddedRescheduled):
 			runner_class = RunningRescheduled
 		else:
@@ -300,65 +361,41 @@ class Runner(object):
 		# Use explicit pickling because of Python 3
 		_runners[task_id] = pickle.dumps(runner)
 		try:
-			self.executor.submit(partial(_process_task, task_id, self.errors))
+			_process_task(task_id, message_queue)
 		except RuntimeError:
 			return False
 
-	def reschedule_periodic(self, task, message):
+	def reschedule_periodic(task, message):
 		from marrow.task.model import Task
 		date_time = message.when.replace(tzinfo=utc) + (task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH)
 		Task.objects(id=task.id).update(set__time__scheduled=date_time, set__time__acquired=None, set__owner=None)
 		task.signal(TaskScheduled, when=date_time)
 
-	def run(self):
-		for event in self.queryset.tail(timeout=self.timeout):
-			while True:
-				try:
-					data = self.errors.get(False)
-				except queue_module.Empty:
-					break
+	# Main loop
+	for event in Message.objects(processed=False).tail(timeout):
+		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
+			continue
 
-				if len(data) == 2:
-					if data[0] == SUCCESS:
-						self.logger.info('Completed: %s', data[1])
-					elif data[1] == FAILURE:
-						self.logger.info('Failed: %s', data[1])
-					continue
+		# msg = '%s, %s: Process %s: %s' % (os.getpid(), current_thread().name, repr(event), event.__class__.__name__)
+		# if isinstance(event, TaskMessage):
+		# 	msg += ' for %s' % event.task.id
+		message_queue.put('%s -- Process %r' % (datetime.now().strftime('%H:%M:%S'), event))
 
-				exc_type, exc_val, tb, task_id, exc_kind = data
-				error_msg = '%s(%s) in %stask %s:\n%s' % (
-					exc_type.__name__, exc_val,
-					'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
-					task_id, tb)
-				self.logger.exception(error_msg)
+		if isinstance(event, StopRunner):
+			message_queue.put('Runner is stopped')
+			return
 
-			if event.processed:
-				continue
-			event.process()
+		if not isinstance(event, TaskMessage):
+			continue
 
-			msg = 'Process %s' % event.__class__.__name__
-			if isinstance(event, TaskMessage):
-				msg += ' for %s' % event.task.id
-			self.logger.info(msg)
+		task = event.task
 
-			if isinstance(event, StopRunner):
-				self.logger.info('Runner is stopped')
-				event.process()
-				return
+		handler = {
+			TaskScheduled: schedule_task,
+			TaskAdded: add_task,
+			TaskAddedRescheduled: add_task,
+			ReschedulePeriodic: reschedule_periodic
+		}.get(event.__class__, lambda task, event: None)
 
-			if not isinstance(event, TaskMessage):
-				continue
-
-			task = event.task
-
-			handler = {
-				TaskScheduled: self.schedule_task,
-				TaskAdded: self.add_task,
-				TaskAddedRescheduled: self.add_task,
-				ReschedulePeriodic: self.reschedule_periodic
-			}.get(event.__class__, lambda task, event: None)
-
-			if handler(task, event) is False:
-				break
-
-		self.shutdown(False)
+		if handler(task, event) is False:
+			break

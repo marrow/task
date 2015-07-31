@@ -250,13 +250,26 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return data
 
 	@property
-	def result(self, timeout=None):
+	def result(self):
 		if not self.done:
-			self.wait(timeout)
+			self.wait()
 
-		result, exception = Task.objects.scalar('task_result', 'task_exception').get(id=self.id)
+		print('DONE B0', self.done)
+		result, exception, freq = Task.objects.scalar('task_result', 'task_exception', 'time__frequency').get(id=self.id)
 		if exception:
 			raise self.exception
+
+		print('FREQ', freq)
+		print('DONE B', self.done)
+		if freq is not None:
+			c = Task.objects(
+				id=self.id,
+				time__frequency__ne=None,
+				time__completed__ne=None,
+				time__cancelled=None,
+				task_result=result).update(set__time__completed=None)
+
+		print('DONE A', self.done)
 
 		return result
 
@@ -326,7 +339,14 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		self.save()
 
 	def wait(self, timeout=None):
+		from marrow.task.message import ReschedulePeriodic
 		for event in TaskFinished.objects(task=self).tail(timeout):
+			# c = ReschedulePeriodic.objects(id=self.id, processed=False).count()
+			# while c:
+			# 	c = ReschedulePeriodic.objects(id=self.id, processed=False).count()
+			# 	print('COUNT WAIT', c)
+			# 	continue
+			print('WAIT E')
 			if isinstance(event, TaskCancelled):
 				raise CancelledError
 			break
@@ -344,7 +364,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if self.acquired:
 			Task.objects(id=self.id).update(set__time__executed=utcnow())
 			return True
-		raise RuntimeError('Task in unexpected state')
+		raise RuntimeError('Task in unexpected state [%s: %s]' % (self.id, self.state))
 	
 	def set_result(self, result):
 		Task.objects(id=self.id).update(set__task_result=result)
@@ -357,12 +377,18 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			return
 
 		typ, value, tb = sys.exc_info()
-		tb = tb.tb_next
-		tb = ''.join(traceback.format_exception(typ, value, tb))
-		exc = dict(
-			exception = encode(value),
-			traceback = tb
-		)
+		if value is None:
+			exc = dict(
+				exception = encode(exception),
+				traceback = None
+			)
+		else:
+			tb = tb.tb_next
+			tb = ''.join(traceback.format_exception(typ, value, tb))
+			exc = dict(
+				exception = encode(value),
+				traceback = tb
+			)
 		Task.objects(id=self.id).update(set__task_exception=exc)
 		return exc
 	

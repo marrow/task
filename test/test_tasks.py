@@ -10,7 +10,6 @@ from mongoengine import Document, IntField
 
 from marrow.task import task as task_decorator
 from marrow.task import Task
-from marrow.task.runner import Runner
 from marrow.task.compat import range, py2, py33
 
 
@@ -43,7 +42,6 @@ def generator_subject(fail=False, exc_val=None):
 
 @task_decorator
 def map_subject(god):
-	print('HAIL ' + god)
 	return "Hail, %s!" % god
 
 
@@ -83,28 +81,6 @@ every_count = _manager.Value('i', 0)
 def every_subject():
 	every_count.value += 1
 	return every_count.value
-
-
-@pytest.fixture(scope='function', params=['thread', 'process'], ids=['thread', 'process'])
-def runner(request, connection):
-	config = Runner._get_config('./example/config.yaml')
-	config['runner']['use'] = request.param
-	config['runner']['timeout'] = 10
-	runner = Runner(config)
-	th = threading.Thread(target=runner.run)
-
-	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
-	# Add it as finalizer for same at failures.
-	def stop(wait=None):
-		# import ipdb; ipdb.set_trace()
-		# runner.shutdown(True)
-		th.join()
-
-	runner.stop_test_runner = stop
-	# request.addfinalizer(stop)
-
-	th.start()
-	return runner
 
 
 @pytest.fixture(scope="function")
@@ -273,7 +249,7 @@ class TestTasks(object):
 		every_count.value = 0
 		task = every_subject.every(3)
 		for i in range(1, 4):
-			import time; time.sleep(3)
+			# import time; time.sleep(6)
 			assert task.result == i
 		runner.stop_test_runner()
 

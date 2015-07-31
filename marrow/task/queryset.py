@@ -31,7 +31,7 @@ class CappedQuerySet(QuerySet):
 		Additional important note: tailing will fail (badly) if the collection is empty.  Always prime the collection
 		with an empty or otherwise unimportant record before attempting to use this feature.
 		"""
-		
+
 		# Process the timeout value, if one is provided.
 		if timeout:
 			end = time() + timeout

@@ -24,7 +24,7 @@ class Message(Document):
 	
 	sender = EmbeddedDocumentField(Owner, db_field='s', default=Owner.identity)
 	created = DateTimeField(db_field='c', default=datetime.utcnow)
-	_processed = BooleanField(db_field='p', default=False)
+	processed = BooleanField(db_field='p', default=False)
 
 	def __repr__(self, inner=None):
 		if inner:
@@ -42,12 +42,12 @@ class Message(Document):
 		__unicode__ = __str__
 		__str__ = __bytes__
 
-	def process(self):
-		Message.objects(id=self.id).update(set___processed=True)
-
-	@property
-	def processed(self):
-		return Message.objects.scalar('_processed').get(id=self.id)
+	# def process(self):
+	# 	Message.objects(id=self.id).update(set___processed=True)
+	#
+	# @property
+	# def processed(self):
+	# 	return Message.objects.scalar('_processed').get(id=self.id)
 
 
 class Keepalive(Message):
@@ -99,6 +99,9 @@ class TaskScheduled(TaskAdded):
 	
 	when = DateTimeField(db_field='w')
 
+	def __repr__(self, inner=None):
+		return super(TaskScheduled, self).__repr__('when={0}'.format(self.when))
+
 
 class TaskProgress(TaskMessage):
 	"""A record broadcast back out to indicate progress on a task.
@@ -147,6 +150,9 @@ class TaskAcquired(TaskMessage):
 
 class ReschedulePeriodic(TaskMessage):
 	when = DateTimeField(db_field='w')
+
+	def __repr__(self, inner=None):
+		return super(ReschedulePeriodic, self).__repr__('when={0}'.format(self.when))
 
 
 class TaskRetry(TaskMessage):
