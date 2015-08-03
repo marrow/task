@@ -1,5 +1,5 @@
 runner:
-  use: thread
+  use: process
   max_workers: 3
   timeout: null
 
@@ -9,6 +9,9 @@ database:
 logging:
   version: 1
   formatters:
+    default:
+      format: "%(asctime)s - %(message)s"
+      datefmt: "%H:%M:%S"
     acquire:
       format: ACQUIRE - %(message)s
   handlers:
@@ -16,6 +19,7 @@ logging:
       class: logging.StreamHandler
       level: INFO
       stream: ext://sys.stdout
+      formatter: default
     console-acquire:
       class: logging.StreamHandler
       level: INFO
@@ -24,7 +28,4 @@ logging:
   loggers:
     runner:
       handlers: [console]
-      level: INFO
-    task.acquire:
-      handlers: [console-acquire]
       level: INFO

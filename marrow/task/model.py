@@ -18,7 +18,8 @@ from .compat import py2, py33, unicode, range, zip
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished, StopRunner
+from .message import (TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished,
+					  StopRunner, TaskCompletedPeriodic, ReschedulePeriodic)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -254,24 +255,31 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if not self.done:
 			self.wait()
 
-		print('DONE B0', self.done)
 		result, exception, freq = Task.objects.scalar('task_result', 'task_exception', 'time__frequency').get(id=self.id)
-		if exception:
-			raise self.exception
+		if freq is None:
+			if exception is not None:
+				raise decode(exception['exception'])
+			return result
 
-		print('FREQ', freq)
-		print('DONE B', self.done)
-		if freq is not None:
-			c = Task.objects(
-				id=self.id,
-				time__frequency__ne=None,
-				time__completed__ne=None,
-				time__cancelled=None,
-				task_result=result).update(set__time__completed=None)
+		def periodic_iterator():
+			stop_index = None
+			for count, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
+				if isinstance(event, TaskCancelled):
+					raise CancelledError
 
-		print('DONE A', self.done)
+				if isinstance(event, TaskCompletedPeriodic):
+					stop_index = ReschedulePeriodic.objects(task=self).count()
 
-		return result
+				else:
+					if not event.success:
+						raise decode(event.result['exception'])
+
+					yield event.result
+
+				if stop_index is not None and count == stop_index:
+					raise StopIteration
+
+		return periodic_iterator()
 
 	@property
 	def exception_info(self):
@@ -293,7 +301,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def _complete_task(self):
 		Task.objects(id=self.id).update(set__time__completed=utcnow())
 
-		self.signal(TaskComplete, success=self.task_exception is None, result=self.task_exception or self.task_result)
+		exception, result = Task.objects.scalar('task_exception', 'task_result').get(id=self.id)
+		self.signal(TaskComplete, success=self.task_exception is None, result=exception or result)
 
 		self.reload('callbacks', 'time')
 		if self.successful:
@@ -339,14 +348,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		self.save()
 
 	def wait(self, timeout=None):
-		from marrow.task.message import ReschedulePeriodic
 		for event in TaskFinished.objects(task=self).tail(timeout):
-			# c = ReschedulePeriodic.objects(id=self.id, processed=False).count()
-			# while c:
-			# 	c = ReschedulePeriodic.objects(id=self.id, processed=False).count()
-			# 	print('COUNT WAIT', c)
-			# 	continue
-			print('WAIT E')
 			if isinstance(event, TaskCancelled):
 				raise CancelledError
 			break
@@ -505,7 +507,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
 		# If the task has already been run (completed or not) it's too late to cancel it.
 		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cancellation.
-		if not Task.objects(id=task, time__executed=None).update(set__time__cancelled=utcnow()):
+		if Task.objects.scalar('time__frequency').get(id=task) is None:
+			qkws = {'time__executed': None}
+		else:
+			qkws = {}
+		if not Task.objects(id=task, **qkws).update(set__time__cancelled=utcnow()):
 			return False
 		
 		for i in range(3):  # We attempt three times to notify the queue.

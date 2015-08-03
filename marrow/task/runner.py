@@ -29,8 +29,8 @@ from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
-								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled)
-from marrow.task.compat import str, unicode, iterkeys, iteritems
+								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic)
+from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
 
 DEFAULT_CONFIG = dict(
@@ -94,6 +94,7 @@ def _run_periodic_task(task_id):
 
 	if task.time.until:
 		if datetime.now().replace(tzinfo=utc) >= task.time.until.replace(tzinfo=utc):
+			task.signal(TaskCompletedPeriodic)
 			return
 
 	task.signal(ReschedulePeriodic, when=datetime.now().replace(tzinfo=utc))
@@ -312,7 +313,7 @@ class Runner(object):
 		if not workers:
 			return 0
 
-		return sum(worker.is_alive() for worker in workers)
+		return sum(worker.is_alive() for worker in (itervalues(workers) if isinstance(workers, dict) else workers))
 
 	def shutdown(self, wait=None):
 		for i in range(self.get_alive_workers_count()):
@@ -336,18 +337,21 @@ def run(timeout=None, message_queue=None):
 	def schedule_task(task, message):
 		from apscheduler.triggers.date import DateTrigger
 
+		if task.cancelled:
+			return
+
 		trigger = DateTrigger(run_date=task.time.scheduled)
 		task_id = unicode(task.id)
 		scheduler.add_job(_run_periodic_task, trigger=trigger, id=task_id, args=[task_id])
 
-		message_queue.put('%s scheduled at %s' % (task_id, trigger))
+		# message_queue.put('%s scheduled at %s' % (task_id, trigger))
 
 	def add_task(task, message):
 		if task.acquire() is None:
-			message_queue.put('Failed to acquire lock on task: %r' % task)
+			# message_queue.put('Failed to acquire lock on task: %r' % task)
 			return
 
-		message_queue.put('Acquired lock on task: %r' % task)
+		# message_queue.put('Acquired lock on task: %r' % task)
 		if isinstance(message, TaskAddedRescheduled):
 			runner_class = RunningRescheduled
 		else:
@@ -368,7 +372,8 @@ def run(timeout=None, message_queue=None):
 	def reschedule_periodic(task, message):
 		from marrow.task.model import Task
 		date_time = message.when.replace(tzinfo=utc) + (task.time.frequency.replace(tzinfo=utc) - task.time.EPOCH)
-		Task.objects(id=task.id).update(set__time__scheduled=date_time, set__time__acquired=None, set__owner=None)
+		if not Task.objects(id=task.id, time__cancelled=None).update(set__time__scheduled=date_time, set__time__acquired=None, set__owner=None):
+			return
 		task.signal(TaskScheduled, when=date_time)
 
 	# Main loop
@@ -376,10 +381,7 @@ def run(timeout=None, message_queue=None):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
 			continue
 
-		# msg = '%s, %s: Process %s: %s' % (os.getpid(), current_thread().name, repr(event), event.__class__.__name__)
-		# if isinstance(event, TaskMessage):
-		# 	msg += ' for %s' % event.task.id
-		message_queue.put('%s -- Process %r' % (datetime.now().strftime('%H:%M:%S'), event))
+		message_queue.put('Process %r' % event)
 
 		if isinstance(event, StopRunner):
 			message_queue.put('Runner is stopped')

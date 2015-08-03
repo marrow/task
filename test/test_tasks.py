@@ -246,11 +246,20 @@ class TestTasks(object):
 		runner.stop_test_runner()
 
 	def test_every_invocation(self, runner):
+		from concurrent.futures import CancelledError
+
 		every_count.value = 0
 		task = every_subject.every(3)
-		for i in range(1, 4):
-			# import time; time.sleep(6)
-			assert task.result == i
+		import time; time.sleep(12)
+		Task.cancel(task)
+		gen = task.result
+		for idx, res in enumerate(gen, 1):
+			if idx < 2:
+				assert res == idx
+			else:
+				with pytest.raises(CancelledError):
+					next(gen)
+					break
 		runner.stop_test_runner()
 
 	def test_every_invocation_start_until(self, runner):
@@ -263,10 +272,6 @@ class TestTasks(object):
 		total_start = time.time()
 		task = every_subject.every(2, starts=start, ends=end)
 		iterations = int((end - start).total_seconds() // 2)
-		for i in range(1, iterations):
-			iteration_start = time.time()
-			time.sleep(2.2)
-			assert task.result == i
-			assert time.time() - iteration_start >= 2
+		assert list(task.result) == list(range(1, iterations))
 		assert time.time() - total_start >= iterations * 2
 		runner.stop_test_runner()

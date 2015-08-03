@@ -3,6 +3,8 @@
 from __future__ import unicode_literals
 
 from datetime import datetime
+
+from pytz import utc
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
 
 from .compat import py2, py3, unicode
@@ -178,6 +180,10 @@ class TaskCancelled(TaskFinished):
 	
 	if py3:  # pragma: no cover
 		__str__ = __unicode__
+
+
+class TaskCompletedPeriodic(TaskFinished):
+	pass
 
 
 class TaskComplete(TaskFinished):
