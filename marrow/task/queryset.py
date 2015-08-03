@@ -7,8 +7,16 @@ from mongoengine import QuerySet, Q
 
 
 class CappedQuerySet(QuerySet):
-	"""A cusom queryset that allows for tailing of capped collections."""
-	
+	"""A custom queryset that allows for tailing of capped collections."""
+
+	def __init__(self, *args, **kwargs):
+		super(CappedQuerySet, self).__init__(*args, **kwargs)
+		self._running = True
+
+	def interrupt(self):
+		"""Set `_running` flag to False, thus stop fetching database after current iteration."""
+		self._running = False
+
 	def tail(self, timeout=None):
 		"""A generator which will block and yield entries as they are added to the collection.
 		
@@ -23,7 +31,7 @@ class CappedQuerySet(QuerySet):
 		Additional important note: tailing will fail (badly) if the collection is empty.  Always prime the collection
 		with an empty or otherwise unimportant record before attempting to use this feature.
 		"""
-		
+
 		# Process the timeout value, if one is provided.
 		if timeout:
 			end = time() + timeout
@@ -39,10 +47,10 @@ class CappedQuerySet(QuerySet):
 		# We track the last seen ID to allow us to efficiently re-query from where we left off.
 		last = None
 		
-		while True:
+		while self._running:
 			cursor = collection.find(query, tailable=True, await_data=True, **q._cursor_args)
 			
-			while True:
+			while self._running:
 				try:
 					record = next(cursor)
 				except StopIteration:
@@ -63,7 +71,7 @@ class CappedQuerySet(QuerySet):
 
 
 class TaskQuerySet(QuerySet):
-	"""A cusom queryset bundling common Task queries."""
+	"""A custom queryset bundling common Task queries."""
 	
 	def incomplete(self, *q_objs, **query):
 		"""Search for tasks that aren't yet completed.
@@ -101,7 +109,7 @@ class TaskQuerySet(QuerySet):
 	def complete(self, *q_objs, **query):
 		"""Search for tasks that completed successfully."""
 		
-		return self.clone().finished(time__cancelled=None, time__exception=None).filter(*q_objs, **query)
+		return self.clone().finished(time__cancelled=None, task_exception=None).filter(*q_objs, **query)
 	
 	def cancelled(self, *q_objs, **query):
 		"""Search for tasks that were explicitly cancelled."""
