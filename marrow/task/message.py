@@ -3,6 +3,8 @@
 from __future__ import unicode_literals
 
 from datetime import datetime
+
+from pytz import utc
 from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
 
 from .compat import py2, py3, unicode
@@ -23,8 +25,9 @@ class Message(Document):
 		)
 	
 	sender = EmbeddedDocumentField(Owner, db_field='s', default=Owner.identity)
-	created = DateTimeField(db_field='w', default=datetime.utcnow)
-	
+	created = DateTimeField(db_field='c', default=datetime.utcnow)
+	processed = BooleanField(db_field='p', default=False)
+
 	def __repr__(self, inner=None):
 		if inner:
 			return '{0.__class__.__name__}({0.id}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.sender, inner)
@@ -36,10 +39,17 @@ class Message(Document):
 	
 	def __bytes__(self):
 		return unicode(self).encode('unicode_escape')
-	
+
 	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
+
+	# def process(self):
+	# 	Message.objects(id=self.id).update(set___processed=True)
+	#
+	# @property
+	# def processed(self):
+	# 	return Message.objects.scalar('_processed').get(id=self.id)
 
 
 class Keepalive(Message):
@@ -51,6 +61,10 @@ class Keepalive(Message):
 	pass
 
 
+class StopRunner(Message):
+	pass
+
+
 class TaskMessage(Message):
 	"""Messages which relate to queued jobs.
 	
@@ -58,7 +72,7 @@ class TaskMessage(Message):
 	"""
 	
 	task = ReferenceField('Task', required=True, db_field='t')
-	
+
 	def __repr__(self, inner=None):
 		if inner:
 			return super(TaskMessage, self).__repr__('task={0.task.id}, {1}'.format(self, inner))
@@ -78,10 +92,17 @@ class TaskAdded(TaskMessage):
 	pass  # No additional data is required.
 
 
+class TaskAddedRescheduled(TaskAdded):
+	pass
+
+
 class TaskScheduled(TaskAdded):
 	"""A scheduled task has been added to the queue."""
 	
 	when = DateTimeField(db_field='w')
+
+	def __repr__(self, inner=None):
+		return super(TaskScheduled, self).__repr__('when={0}'.format(self.when))
 
 
 class TaskProgress(TaskMessage):
@@ -120,12 +141,20 @@ class TaskProgress(TaskMessage):
 
 class TaskAcquired(TaskMessage):
 	"""Indicate that a task has been acquired by a worker."""
+	owner = EmbeddedDocumentField(Owner, db_field='o')
 	
 	def __unicode__(self):
 		return "Task {0.task.id} locked by PID {0.sender.pid} on host: {0.sender.host}".format(self)
 	
 	if py3:  # pragma: no cover
 		__str__ = __unicode__
+
+
+class ReschedulePeriodic(TaskMessage):
+	when = DateTimeField(db_field='w')
+
+	def __repr__(self, inner=None):
+		return super(ReschedulePeriodic, self).__repr__('when={0}'.format(self.when))
 
 
 class TaskRetry(TaskMessage):
@@ -153,13 +182,17 @@ class TaskCancelled(TaskFinished):
 		__str__ = __unicode__
 
 
+class TaskCompletedPeriodic(TaskFinished):
+	pass
+
+
 class TaskComplete(TaskFinished):
 	"""Indicate completion of a task.
 	
 	You can monitor for completion without caring about the actual result.
 	"""
 	
-	success = BooleanField(db_field='s', default=True)
+	success = BooleanField(db_field='su', default=True)
 	result = DynamicField(db_field='r')
 	
 	def __repr__(self, inner=None):
@@ -171,5 +204,24 @@ class TaskComplete(TaskFinished):
 		
 		return "Task {0.task.id} failed to complete successfully.".format(self)
 	
+	if py3:  # pragma: no cover
+		__str__ = __unicode__
+
+
+class IterationRequest(TaskMessage):
+	pass
+
+
+class TaskIterated(TaskMessage):
+	NORMAL, FINISHED, FAILED = range(3)
+
+	status = IntField(db_field='st', default=0)
+	result = DynamicField(db_field='r')
+
+	def __unicode__(self):
+		if self.status == self.FAILED:
+			return "Task {0.task.id} iteration failed.".format(self)
+		return "Task {0.task.id} iteration completed.".format(self)
+
 	if py3:  # pragma: no cover
 		__str__ = __unicode__

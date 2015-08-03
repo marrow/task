@@ -1,0 +1,31 @@
+runner:
+  use: process
+  max_workers: 3
+  timeout: null
+
+database:
+  host: mongodb://localhost/mtask
+
+logging:
+  version: 1
+  formatters:
+    default:
+      format: "%(asctime)s - %(message)s"
+      datefmt: "%H:%M:%S"
+    acquire:
+      format: ACQUIRE - %(message)s
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      stream: ext://sys.stdout
+      formatter: default
+    console-acquire:
+      class: logging.StreamHandler
+      level: INFO
+      stream: ext://sys.stdout
+      formatter: acquire
+  loggers:
+    runner:
+      handlers: [console]
+      level: INFO

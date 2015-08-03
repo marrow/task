@@ -9,6 +9,7 @@ from threading import Thread
 from mongoengine import Document, StringField, IntField
 
 from marrow.task.queryset import CappedQuerySet
+from marrow.task.compat import range
 
 
 class Log(Document):
@@ -130,3 +131,24 @@ class TestCappedQueries(object):
 		
 		assert Log.objects.count() == 10
 		assert count == 100  # The rest generated during that one second we paused.
+
+	def test_interruption(self):
+		assert not Log.objects.count()
+
+		t = Thread(target=gen_log_entries)
+		t.start()
+
+		count = 0
+
+		queryset = Log.objects
+
+		before = 0
+		for record in queryset.tail(timeout=20):
+			count += 1
+			if count == 8:
+				before = count
+				queryset.interrupt()
+
+		assert count == before
+
+		t.join()

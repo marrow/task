@@ -8,6 +8,7 @@ To use these, be sure to start an interactive shell and import the module.
 from __future__ import unicode_literals, print_function
 
 
+from mongoengine import connect
 from marrow.task import task, Task
 
 
@@ -23,7 +24,10 @@ def hello(name):
 	#  * task - a lazily-
 	# Execution (immediate, deferred, whatever) provides the ObjectId representing this execution, or None
 	# if running locally.
-	return "Hello, " + name + " I'm " + (hello.context.id or 'running locally')
+	import time
+	time.sleep(10)
+	res =  "Hello, %s I'm %s" % (name, hello.context.id or 'running locally')
+	return res
 
 
 # Bare function.
@@ -42,7 +46,7 @@ def farewell(name):
 @task(defer=True)
 def count(n):
 	for i in range(n):
-		yield n
+		yield i
 
 
 def emit(task):
@@ -50,7 +54,7 @@ def emit(task):
 
 
 def run():
-	
+	connect('mtask')
 	# Not Deferred by Default
 	# Executing a decorated function, same as hello.call(None, *args, **kw)
 	hello("world")
@@ -62,7 +66,7 @@ def run():
 	
 	# Explicitly deferring, well, defers.  Returns a Task instance for this task.
 	receipt = hello.defer("world")
-	
+
 	# There are several things you can do with a task instance:
 	receipt.wait()  # Wait forever for completion (of any kind).
 	receipt.wait(30)  # Wait 30 seconds.
@@ -136,3 +140,7 @@ def run():
 	# Task.retries  # The maximum number of retries.
 	# Task.delay  # The number of seconds to wait before starting execution.
 	# Task.rate  # The maximum number of this task to process.  (10, 2, 'hour'), 10 every two hours.
+
+
+if __name__ == '__main__':
+	run()
