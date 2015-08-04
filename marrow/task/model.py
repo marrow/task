@@ -243,10 +243,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		
 		data = dict(acquired=self.time.acquired - self.time.created)
 		
-		data['executed'] = (self.time.acquired - self.time.executed) if self.time.executed else None
+		data['executed'] = (self.time.executed - self.time.acquired) if self.time.executed else None
 		
 		# We don't distinguish between cancellation, errors, and successes here.
-		data['completed'] = (self.time.executed - self.time.completed) if self.time.completed else None
+		data['completed'] = (self.time.completed - self.time.executed) if self.time.completed else None
 		
 		return data
 
