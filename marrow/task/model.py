@@ -18,8 +18,8 @@ from .compat import py2, py33, unicode, range, zip
 from .exc import AcquireFailed, TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import (TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished,
-					  StopRunner, TaskCompletedPeriodic, ReschedulePeriodic)
+from .message import (TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskFinished,
+					  StopRunner, TaskCompletedPeriodic, ReschedulePeriodic, TaskProgress)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -53,9 +53,33 @@ class GeneratorTaskIterator(object):
 	def __init__(self, task, gen):
 		self.task = task
 		self.generator = gen
+		self.iteration = 0
+		self.total = None
 
 	def __iter__(self):
 		return self
+
+	def process_iteration_result(self, result, status):
+		self.iteration += 1
+
+		if isinstance(result, TaskProgress):
+			if result.id is None:
+				result.save()
+			return
+
+		if not (isinstance(result, (tuple, list)) and len(result) >= 2):
+			self.task.signal(TaskProgress, current=self.iteration, total=self.total, result=result, status=status)
+			return
+
+		self.iteration, self.total = result
+		data = {
+			'current': self.iteration,
+			'total': self.total
+		}
+		if len(result) > 2:
+			data['result'] = result[2]
+
+		self.task.signal(TaskProgress, status=status, **data)
 
 	def next(self):
 		try:
@@ -63,19 +87,19 @@ class GeneratorTaskIterator(object):
 
 		except StopIteration as exception:
 			value = getattr(exception, 'value', None)
-			self.task.signal(TaskIterated, status=TaskIterated.FINISHED, result=value)
+			self.process_iteration_result(value, TaskProgress.FINISHED)
 			self.task._complete_task()
 			raise
 
 		except Exception as exception:
 			exc = self.task.set_exception(exception)
-			self.task.signal(TaskIterated, status=TaskIterated.FAILED, result=exc)
+			self.process_iteration_result(exc, TaskProgress.FAILED)
 			self.task._complete_task()
-			raise StopIteration()
+			raise StopIteration
 
 		else:
 			Task.objects(id=self.task.id).update(push__task_result=item)
-			self.task.signal(TaskIterated, status=TaskIterated.NORMAL, result=item)
+			self.process_iteration_result(item, TaskProgress.NORMAL)
 			return item
 
 	__next__ = next
@@ -143,8 +167,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		from marrow.task.message import IterationRequest
 
 		self.signal(IterationRequest)
-		for entry in TaskIterated.objects(task=self).tail():
-			if entry.status == TaskIterated.FINISHED:
+		for entry in TaskProgress.objects(task=self).tail():
+			if entry.status == TaskProgress.FINISHED:
 				if entry.result is not None:
 					yield entry.result
 
@@ -153,7 +177,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				else:
 					raise StopIteration
 
-			elif entry.status == TaskIterated.FAILED:
+			elif entry.status == TaskProgress.FAILED:
 				raise self.exception
 
 			if entry.result is not None:

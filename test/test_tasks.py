@@ -145,10 +145,10 @@ class TestTasks(object):
 	def test_generator_task(self, runner):
 		task = generator_subject.defer(fail=False)
 		assert list(task) == list(range(10))
-		from marrow.task.message import TaskIterated
-		count = TaskIterated.objects.count()
+		from marrow.task.message import TaskProgress
+		count = TaskProgress.objects.count()
 		assert list(task) == list(range(10))
-		assert TaskIterated.objects.count() == count
+		assert TaskProgress.objects.count() == count
 		runner.stop_test_runner(5)
 
 	@pytest.mark.skipif(not py33, reason="requires Python 3.3")

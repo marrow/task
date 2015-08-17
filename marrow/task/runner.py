@@ -29,7 +29,8 @@ from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
-								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic)
+								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic,
+								 TaskProgress)
 from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
 
@@ -176,6 +177,15 @@ class RunningRescheduled(RunningTask):
 
 
 class RunningGenerator(RunningTask):
+	def handle(self):
+		generator = self.handle_task().data
+		task = self.get_task()
+		for item in generator:
+			task._invoke_callbacks()
+		del _runners[self.task_id]
+
+
+class RunningGeneratorWaiting(RunningGenerator):
 	def handle(self):
 		generator = self.handle_task().data
 		task = self.get_task()
