@@ -40,6 +40,12 @@ def generator_subject(fail=False, exc_val=None):
 		raise StopIteration(exc_val)
 
 
+@task_decorator(wait=True)
+def waiting_generator_subject():
+	for i in range(10):
+		yield i
+
+
 @task_decorator
 def map_subject(god):
 	return "Hail, %s!" % god
@@ -143,13 +149,30 @@ class TestTasks(object):
 		handler.join()
 
 	def test_generator_task(self, runner):
-		task = generator_subject.defer(fail=False)
-		assert list(task) == list(range(10))
-		from marrow.task.message import TaskProgress
-		count = TaskProgress.objects.count()
-		assert list(task) == list(range(10))
-		assert TaskProgress.objects.count() == count
+		for i in range(runner.executor._max_workers + 2):
+			task = generator_subject.defer(fail=False)
+			assert list(task) == list(range(10))
+			from marrow.task.message import TaskProgress
+			count = TaskProgress.objects.count()
+			assert list(task) == list(range(10))
+			assert TaskProgress.objects.count() == count
 		runner.stop_test_runner(5)
+
+	def test_generator_task_waiting(self, runner):
+		task = waiting_generator_subject.defer()
+		assert list(task) == list(range(10))
+		assert task.result == list(range(10))
+		task = waiting_generator_subject.defer()
+		generator = task.result_iterator()
+		from marrow.task.message import TaskProgress
+		base_count = TaskProgress.objects.count()
+		assert TaskProgress.objects.count() - base_count == 0
+		assert next(generator) == 0
+		assert next(generator) == 1
+		assert TaskProgress.objects.count() - base_count == 2
+		assert list(generator) == list(range(2, 10))
+		assert task.result == list(range(10))
+		runner.stop_test_runner()
 
 	@pytest.mark.skipif(not py33, reason="requires Python 3.3")
 	def test_generator_task_exception_value(self, runner):

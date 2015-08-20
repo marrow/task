@@ -129,7 +129,7 @@ class TaskProgress(TaskMessage):
 	
 	def __repr__(self, inner=None):
 		pct = "{0:.0%}".format(self.percentage) if self.total else "N/A"
-		msg = unicode(self.result) if self.result else "None"
+		msg = unicode(self.result)
 		return super(TaskProgress, self).__repr__('{0.current}/{0.total}, {1}, result={2}, status={3}'.format(self, pct, msg, self.get_status_display()))
 	
 	def __unicode__(self):

@@ -28,7 +28,7 @@ def _absolute_time(dt):
 	return datetime.utcnow().replace(tzinfo=utc) + dt
 
 
-def _decorate_task(defer=False, generator=False, scheduled=False, repeating=False):
+def _decorate_task(defer=False, generator=False, scheduled=False, repeating=False, wait=False):
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
 		if not defer:
@@ -36,6 +36,8 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 
 		task = Task(callable=name(wrapped))
 		task.generator = generator
+		if generator and wait:
+			task.options['wait_for_iteration'] = True
 
 		# Allow calling bound methods of Document sub-classes.
 		if isinstance(instance, Document):
@@ -87,7 +89,7 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 	return _decorate_task_inner
 
 
-def task(_fn=None, defer=False):
+def task(_fn=None, defer=False, wait=False):
 	"""Decorate a function or method for Task-based execution.
 	
 	By default calling the function will return a mock Task which will lazily execute the target callable the first
@@ -102,10 +104,10 @@ def task(_fn=None, defer=False):
 			fn.__dict__['context'] = threading.local()
 			fn.context.id = None
 		
-		fn.__dict__['call'] = immediate = _decorate_task(False, generator)(fn)
-		fn.__dict__['defer'] = deferred = _decorate_task(True, generator)(fn)
-		fn.__dict__['at'] = _decorate_task(True, generator, scheduled=True)(fn)
-		fn.__dict__['every'] = _decorate_task(True, generator, repeating=True)(fn)
+		fn.__dict__['call'] = immediate = _decorate_task(False, generator, wait=wait)(fn)
+		fn.__dict__['defer'] = deferred = _decorate_task(True, generator, wait=wait)(fn)
+		fn.__dict__['at'] = _decorate_task(True, generator, scheduled=True, wait=wait)(fn)
+		fn.__dict__['every'] = _decorate_task(True, generator, repeating=True, wait=wait)(fn)
 
 		return deferred if defer else immediate
 	

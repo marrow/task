@@ -1,15 +1,13 @@
 # encoding: utf-8
 
-import os
 import pickle
 import logging
 import logging.config
-from functools import partial
 from copy import deepcopy
 from datetime import datetime
 from multiprocessing import Queue
-from multiprocessing.managers import BaseManager, DictProxy, Value, ValueProxy, AcquirerProxy, ListProxy
-from threading import RLock, current_thread, Thread
+from multiprocessing.managers import BaseManager, Value, ValueProxy
+from threading import Thread
 
 try:
 	import Queue as queue_module
@@ -29,8 +27,7 @@ from mongoengine import connect
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
-								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic,
-								 TaskProgress)
+								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic)
 from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
 
@@ -178,16 +175,25 @@ class RunningRescheduled(RunningTask):
 
 class RunningGenerator(RunningTask):
 	def handle(self):
-		generator = self.handle_task().data
+		result = self.handle_task()
+		if result.kind != SUCCESS:
+			return result
+
+		generator = result.data
 		task = self.get_task()
 		for item in generator:
 			task._invoke_callbacks()
 		del _runners[self.task_id]
+		return RunStatus(SUCCESS, None)
 
 
 class RunningGeneratorWaiting(RunningGenerator):
 	def handle(self):
-		generator = self.handle_task().data
+		result = self.handle_task()
+		if result.kind != SUCCESS:
+			return result
+
+		generator = result.data
 		task = self.get_task()
 		for event in IterationRequest.objects(task=self.task_id).tail():
 			try:
@@ -197,6 +203,7 @@ class RunningGeneratorWaiting(RunningGenerator):
 				break
 			else:
 				task._invoke_callbacks()
+		return RunStatus(SUCCESS, None)
 
 
 _manager.register('Value', Value, ValueProxy)
@@ -209,7 +216,7 @@ def _process_task(task_id, message_queue=None):
 	runner = pickle.loads(_runners[task_id])
 	result = runner.handle()
 
-	if message_queue is None:
+	if message_queue is None or result is None:
 		return
 
 	if result.kind in (EXCEPTION, RUNNER_EXCEPTION):
@@ -244,39 +251,38 @@ class Runner(object):
 		self.message_queue = _manager.Queue()
 		self.message_thread = None
 
+	def _handle_messages(self):
+		while True:
+			try:
+				data = self.message_queue.get(True)
+			except IOError:
+				return
+
+			if data is None:
+				return
+
+			if isinstance(data, (str, unicode)):
+				self.logger.info(data)
+				continue
+
+			if len(data) == 2:
+				if data[0] == SUCCESS:
+					self.logger.info('Completed: %s', data[1])
+
+				elif data[1] == FAILURE:
+					self.logger.warning('Failed: %s', data[1])
+
+				continue
+
+			exc_type, exc_val, tb, task_id, exc_kind = data
+			error_msg = '%s(%s) in %stask %s:\n%s' % (
+				exc_type.__name__, exc_val,
+				'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
+				task_id, tb)
+			self.logger.exception(error_msg)
+
 	def run(self):
-		def _handle_messages():
-			while True:
-				try:
-					data = self.message_queue.get(True)
-				except IOError:
-					return
-				# 	continue
-
-				if data is None:
-					return
-
-				if isinstance(data, (str, unicode)):
-					self.logger.info(data)
-					continue
-
-				if len(data) == 2:
-					if data[0] == SUCCESS:
-						self.logger.info('Completed: %s', data[1])
-
-					elif data[1] == FAILURE:
-						self.logger.warning('Failed: %s', data[1])
-
-					continue
-
-				exc_type, exc_val, tb, task_id, exc_kind = data
-				error_msg = '%s(%s) in %stask %s:\n%s' % (
-					exc_type.__name__, exc_val,
-					'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
-					task_id, tb)
-				self.logger.exception(error_msg)
-
-		self.message_thread = Thread(target=_handle_messages)
+		self.message_thread = Thread(target=self._handle_messages)
 		self.message_thread.start()
 
 		for i in range(self.executor._max_workers):
@@ -366,7 +372,10 @@ def run(timeout=None, message_queue=None):
 			runner_class = RunningRescheduled
 		else:
 			if task.generator:
-				runner_class = RunningGenerator
+				if task.options.get('wait_for_iteration'):
+					runner_class = RunningGeneratorWaiting
+				else:
+					runner_class = RunningGenerator
 			else:
 				runner_class = RunningTask
 

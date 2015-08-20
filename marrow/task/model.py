@@ -4,22 +4,21 @@ from __future__ import unicode_literals
 
 import pickle
 from logging import getLogger
-from inspect import isclass, ismethod, isgeneratorfunction, isgenerator
+from inspect import isgeneratorfunction, isgenerator
 from pytz import utc
 from datetime import datetime
 from concurrent.futures import CancelledError
 from bson import ObjectId
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
+from mongoengine import (Document, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField,
+						 GenericReferenceField)
 from wrapt.wrappers import FunctionWrapper
-from marrow.package.canonical import name
-from marrow.package.loader import load
 
 from .compat import py2, py33, unicode, range, zip
-from .exc import AcquireFailed, TimeoutError
+from .exc import TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import (TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskFinished,
-					  StopRunner, TaskCompletedPeriodic, ReschedulePeriodic, TaskProgress)
+from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, StopRunner,
+					  TaskCompletedPeriodic, ReschedulePeriodic, TaskProgress)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -65,21 +64,23 @@ class GeneratorTaskIterator(object):
 		if isinstance(result, TaskProgress):
 			if result.id is None:
 				result.save()
-			return
+			return result.result
 
-		if not (isinstance(result, (tuple, list)) and len(result) >= 2):
+		if not (isinstance(result, (tuple, list)) and len(result) in (2, 3)):
 			self.task.signal(TaskProgress, current=self.iteration, total=self.total, result=result, status=status)
-			return
+			return result
 
-		self.iteration, self.total = result
+		self.iteration, self.total = result[:2]
 		data = {
 			'current': self.iteration,
-			'total': self.total
+			'total': self.total,
+			'result': None
 		}
 		if len(result) > 2:
 			data['result'] = result[2]
 
 		self.task.signal(TaskProgress, status=status, **data)
+		return data['result']
 
 	def next(self):
 		try:
@@ -98,9 +99,9 @@ class GeneratorTaskIterator(object):
 			raise StopIteration
 
 		else:
-			Task.objects(id=self.task.id).update(push__task_result=item)
-			self.process_iteration_result(item, TaskProgress.NORMAL)
-			return item
+			result = self.process_iteration_result(item, TaskProgress.NORMAL)
+			Task.objects(id=self.task.id).update(push__task_result=result)
+			return result
 
 	__next__ = next
 
@@ -134,6 +135,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	owner = EmbeddedDocumentField(Owner, db_field='o')
 	retry = EmbeddedDocumentField(Retry, db_field='r', default=Retry)
 	progress = EmbeddedDocumentField(Progress, db_field='p', default=Progress)
+	options = DictField(db_field='op')
 	
 	# Python Magic Methods
 	
@@ -166,7 +168,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 		from marrow.task.message import IterationRequest
 
-		self.signal(IterationRequest)
+		if self.options.get('wait_for_iteration'):
+			self.signal(IterationRequest)
 		for entry in TaskProgress.objects(task=self).tail():
 			if entry.status == TaskProgress.FINISHED:
 				if entry.result is not None:
@@ -183,7 +186,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			if entry.result is not None:
 				yield entry.result
 
-			self.signal(IterationRequest)
+			if self.options.get('wait_for_iteration'):
+				self.signal(IterationRequest)
 
 	def result_iterator(self):
 		"""Iterate the results of a generator task.
