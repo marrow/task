@@ -31,6 +31,17 @@ from marrow.task.message import (TaskAdded, Message, StopRunner, IterationReques
 from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
 
+LISTENED_MESSAGES = [
+	StopRunner,
+	TaskAdded,
+	TaskScheduled,
+	TaskAddedRescheduled,
+	ReschedulePeriodic
+]
+
+LISTENED_MESSAGES = [cls._class_name for cls in LISTENED_MESSAGES]
+
+
 DEFAULT_CONFIG = dict(
 	runner = dict(
 		timeout = None,
@@ -169,8 +180,11 @@ class RunningTask(object):
 class RunningRescheduled(RunningTask):
 	def handle(self):
 		from marrow.task.model import Task
-		Task.objects(id=self.task_id).update(set__time__completed=None)
-		return super(RunningRescheduled, self).handle()
+		task = self.get_task()
+		task.acquire()
+		result = super(RunningRescheduled, self).handle()
+		task.release()
+		return result
 
 
 class RunningGenerator(RunningTask):
@@ -396,7 +410,8 @@ def run(timeout=None, message_queue=None):
 		task.signal(TaskScheduled, when=date_time)
 
 	# Main loop
-	for event in Message.objects(processed=False).tail(timeout):
+	for event in Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False).tail(timeout):
+	# for event in Message.objects(processed=False).tail(timeout):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
 			continue
 

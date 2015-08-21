@@ -158,9 +158,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if caller_frame.f_code.co_filename.startswith(mongoengine_path):
 			return super(Task, self).__iter__()
 
-		return self.result_iterator()
+		return self.iterator()
 
-	def _result_iterator(self):
+	def _generator_iterator(self):
 		if self.done:
 			for item in self.result:
 				yield item
@@ -189,14 +189,33 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			if self.options.get('wait_for_iteration'):
 				self.signal(IterationRequest)
 
-	def result_iterator(self):
+	def _periodic_iterator(self):
+		stop_index = None
+		for count, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
+			if isinstance(event, (TaskCompletedPeriodic, TaskCancelled)):
+				stop_index = ReschedulePeriodic.objects(task=self).count()
+
+			else:
+				if not event.success:
+					raise decode(event.result['exception'])
+
+				yield event.result
+
+			if stop_index is not None and count == stop_index:
+				raise StopIteration
+
+	def iterator(self):
 		"""Iterate the results of a generator task.
 
 		It is an error condition to attempt to iterate a non-generator task.
 		"""
-		if not self.generator:
-			raise ValueError('Cannot use on non-generator tasks.')
-		return self._result_iterator()
+		if not (self.generator or self.time.frequency):
+			raise ValueError('Only periodic and generator tasks are iterable')
+
+		if self.time.frequency:
+			return self._periodic_iterator()
+
+		return self._generator_iterator()
 
 	def __str__(self):
 		"""Get the unicode string result of this task."""
@@ -289,25 +308,16 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				raise decode(exception['exception'])
 			return result
 
-		def periodic_iterator():
-			stop_index = None
-			for count, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
-				if isinstance(event, TaskCancelled):
-					raise CancelledError
+		event = TaskComplete.objects(task=self).order_by('-id').first()
+		if event is None:
+			if TaskCancelled.objects(task=self).count():
+				raise CancelledError
+			return None
 
-				if isinstance(event, TaskCompletedPeriodic):
-					stop_index = ReschedulePeriodic.objects(task=self).count()
+		if not event.success:
+			raise decode(event.result['exception'])
 
-				else:
-					if not event.success:
-						raise decode(event.result['exception'])
-
-					yield event.result
-
-				if stop_index is not None and count == stop_index:
-					raise StopIteration
-
-		return periodic_iterator()
+		return event.result
 
 	@property
 	def exception_info(self):

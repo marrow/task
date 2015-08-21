@@ -163,7 +163,7 @@ class TestTasks(object):
 		assert list(task) == list(range(10))
 		assert task.result == list(range(10))
 		task = waiting_generator_subject.defer()
-		generator = task.result_iterator()
+		generator = task.iterator()
 		from marrow.task.message import TaskProgress
 		base_count = TaskProgress.objects.count()
 		assert TaskProgress.objects.count() - base_count == 0
@@ -269,20 +269,15 @@ class TestTasks(object):
 		runner.stop_test_runner()
 
 	def test_every_invocation(self, runner):
-		from concurrent.futures import CancelledError
-
+		from time import sleep
 		every_count.value = 0
 		task = every_subject.every(3)
-		import time; time.sleep(12)
+		sleep(4)
+		assert task.result == 1
+		sleep(9)
 		Task.cancel(task)
-		gen = task.result
-		for idx, res in enumerate(gen, 1):
-			if idx < 2:
-				assert res == idx
-			else:
-				with pytest.raises(CancelledError):
-					next(gen)
-					break
+		assert list(task) == [1, 2, 3, 4]
+		assert task.result == 4
 		runner.stop_test_runner()
 
 	def test_every_invocation_start_until(self, runner):
@@ -295,6 +290,6 @@ class TestTasks(object):
 		total_start = time.time()
 		task = every_subject.every(2, starts=start, ends=end)
 		iterations = int((end - start).total_seconds() // 2)
-		assert list(task.result) == list(range(1, iterations))
+		assert list(task) == list(range(1, iterations))
 		assert time.time() - total_start >= iterations * 2
 		runner.stop_test_runner()
