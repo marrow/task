@@ -191,9 +191,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	def _periodic_iterator(self):
 		stop_index = None
-		for count, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
+		for current, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
 			if isinstance(event, (TaskCompletedPeriodic, TaskCancelled)):
-				stop_index = ReschedulePeriodic.objects(task=self).count()
+				stop_index = TaskComplete.objects(task=self).count()
 
 			else:
 				if not event.success:
@@ -201,7 +201,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 				yield event.result
 
-			if stop_index is not None and count == stop_index:
+			if stop_index is not None and current >= stop_index:
 				raise StopIteration
 
 	def iterator(self):
@@ -210,7 +210,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		It is an error condition to attempt to iterate a non-generator task.
 		"""
 		if not (self.generator or self.time.frequency):
-			raise ValueError('Only periodic and generator tasks are iterable')
+			raise ValueError('Only periodic and generator tasks are iterable.')
 
 		if self.time.frequency:
 			return self._periodic_iterator()
@@ -347,7 +347,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			self._invoke_callbacks()
 
 	def handle(self):
-		if self.done:
+		if not self.time.frequency and self.done:
 			return self.task_result
 
 		func = self.callable
@@ -528,6 +528,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				message.save()
 			except Exception:
 				pass
+			else:
+				break
 
 	# Futures-compatible future API.
 	

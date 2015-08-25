@@ -184,7 +184,7 @@ class TestTasks(object):
 		task = subject.defer(42)
 		with pytest.raises(ValueError) as exc:
 			list(task)
-		assert 'Cannot use on non-generator tasks.' in str(exc)
+		assert 'Only periodic and generator tasks are iterable.' in str(exc)
 		task = generator_subject.defer(fail=True)
 		with pytest.raises(ValueError):
 			list(task)

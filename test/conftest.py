@@ -33,7 +33,7 @@ def connection(request):
 def runner(request, connection):
 	config = Runner._get_config('./example/config.yaml')
 	config['runner']['use'] = request.param
-	config['runner']['timeout'] = 10
+	# config['runner']['timeout'] = 10
 	runner = Runner(config)
 	# th = threading.Thread(target=runner.run)
 	runner.run()
