@@ -57,16 +57,26 @@ def sleep_subject(a):
 	time.sleep(1)
 	return a
 
-_manager = Manager()
-callback_count = _manager.Value('i', 0)
+
+_manager = None
+every_count = None
+
+
+def initialize():
+	global _manager, every_count
+
+	if _manager is not None:
+		return
+
+	_manager = Manager()
+	every_count = _manager.Value('i', 0)
 
 
 def task_callback(task):
-	global callback_count
+	import mongoengine
 
 	result = "Callback for %s" % task.id
-	print(result)
-	callback_count.value += 1
+	mongoengine.connect('testing').testing.test_data.update({}, {'$inc': {'callback_counter': 1}})
 	return result
 
 
@@ -78,9 +88,6 @@ def context_subject():
 @task_decorator
 def exception_subject():
 	raise AttributeError('FAILURE')
-
-
-every_count = _manager.Value('i', 0)
 
 
 @task_decorator
@@ -208,14 +215,14 @@ class TestTasks(object):
 			list(result)
 		runner.stop_test_runner(True)
 
-	def test_callback(self, runner):
-		callback_count.value = 0
+	def test_callback(self, connection, runner):
+		connection.testing.create_collection('test_data').insert({'callback_counter': 0})
 		task = sleep_subject.defer(42)
 		task.add_done_callback(task_callback)
 		assert_task(task)
 		import time
 		time.sleep(1)
-		assert callback_count.value == 1
+		assert connection.testing.test_data.find_one()['callback_counter'] == 1
 		runner.stop_test_runner()
 
 	def test_context(self, runner):
@@ -270,6 +277,7 @@ class TestTasks(object):
 
 	def test_every_invocation(self, runner):
 		from time import sleep
+		initialize()
 		every_count.value = 0
 		task = every_subject.every(3)
 		sleep(4)
@@ -284,6 +292,7 @@ class TestTasks(object):
 		from datetime import datetime, timedelta
 		import time
 
+		initialize()
 		every_count.value = 0
 		start = datetime.now() + timedelta(seconds=5)
 		end = start + timedelta(seconds=6)

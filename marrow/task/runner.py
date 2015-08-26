@@ -62,8 +62,23 @@ class CustomManager(BaseManager):
 
 _tasks_data = {}
 
-_manager = CustomManager()
-_manager.register('Queue', Queue)
+_manager = None
+_runners = None
+
+
+def _initialize():
+		global _manager, _runners
+
+		if _manager is not None:
+			return
+
+		_manager = CustomManager()
+		_manager.register('Queue', Queue)
+		_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
+		_manager.register('Value', Value, ValueProxy)
+		_manager.start()
+
+		_runners = _manager.RunnersStorage()
 
 
 class RunnersStorage(object):
@@ -88,8 +103,6 @@ class RunnersStorage(object):
 
 	def get_data(self):
 		return self._runners
-
-_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
 
 
 def _run_periodic_task(task_id):
@@ -220,12 +233,6 @@ class RunningGeneratorWaiting(RunningGenerator):
 		return RunStatus(SUCCESS, None)
 
 
-_manager.register('Value', Value, ValueProxy)
-_manager.start()
-
-_runners = _manager.RunnersStorage()
-
-
 def _process_task(task_id, message_queue=None):
 	runner = pickle.loads(_runners[task_id])
 	result = runner.handle()
@@ -243,6 +250,8 @@ def _process_task(task_id, message_queue=None):
 
 class Runner(object):
 	def __init__(self, config=None):
+		_initialize()
+
 		config = self._get_config(config)
 
 		ex_cls = dict(
@@ -260,7 +269,6 @@ class Runner(object):
 		# Get first logger name from config or class name.
 		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)
-		# self.queryset = Message.objects
 
 		self.message_queue = _manager.Queue()
 		self.message_thread = None
@@ -356,7 +364,6 @@ class Runner(object):
 		self.message_queue.close()
 		self.message_queue.join_thread()
 		self.message_thread.join()
-		# self.queryset.interrupt()
 		self.logger.info("SHUTDOWN")
 
 
