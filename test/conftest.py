@@ -15,6 +15,7 @@ def connection(request):
 	"""Automatically connect before testing and discard data after testing."""
 	connection = mongoengine.connect('testing')
 	connection.testing.drop_collection("TaskQueue")
+	connection.testing.create_collection('test_data')
 	try:
 		connection.testing.create_collection(
 			Message._meta['collection'],
@@ -33,7 +34,7 @@ def connection(request):
 def runner(request, connection):
 	config = Runner._get_config('./example/config.yaml')
 	config['runner']['use'] = request.param
-	# config['runner']['timeout'] = 10
+	config['runner']['timeout'] = 10
 	runner = Runner(config)
 	# th = threading.Thread(target=runner.run)
 	runner.run()

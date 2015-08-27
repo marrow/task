@@ -92,8 +92,10 @@ def exception_subject():
 
 @task_decorator
 def every_subject():
-	every_count.value += 1
-	return every_count.value
+	from mongoengine import connect
+	collection = connect('testing').testing.test_data
+	collection.update({}, {'$inc': {'every_counter': 1}})
+	return collection.find_one()['every_counter']
 
 
 @pytest.fixture(scope="function")
@@ -216,7 +218,7 @@ class TestTasks(object):
 		runner.stop_test_runner(True)
 
 	def test_callback(self, connection, runner):
-		connection.testing.create_collection('test_data').insert({'callback_counter': 0})
+		connection.testing.test_data.insert({'callback_counter': 0})
 		task = sleep_subject.defer(42)
 		task.add_done_callback(task_callback)
 		assert_task(task)
@@ -275,10 +277,9 @@ class TestTasks(object):
 		assert time.time() - start >= 5
 		runner.stop_test_runner()
 
-	def test_every_invocation(self, runner):
+	def test_every_invocation(self, connection, runner):
 		from time import sleep
-		initialize()
-		every_count.value = 0
+		connection.testing.test_data.insert({'every_counter': 0})
 		task = every_subject.every(3)
 		sleep(4)
 		assert task.result == 1
@@ -288,12 +289,11 @@ class TestTasks(object):
 		assert task.result == 4
 		runner.stop_test_runner()
 
-	def test_every_invocation_start_until(self, runner):
+	def test_every_invocation_start_until(self, connection, runner):
 		from datetime import datetime, timedelta
 		import time
 
-		initialize()
-		every_count.value = 0
+		connection.testing.test_data.insert({'every_counter': 0})
 		start = datetime.now() + timedelta(seconds=5)
 		end = start + timedelta(seconds=6)
 		total_start = time.time()

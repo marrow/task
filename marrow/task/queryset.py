@@ -54,18 +54,21 @@ class CappedQuerySet(QuerySet):
 				try:
 					record = next(cursor)
 				except StopIteration:
+					if timeout and time() >= end:
+						return
+
 					if not cursor.alive:
 						break
-					
+
 					record = None
-				
+
 				if record is not None:
+					if timeout:
+						end = time() + timeout
+
 					yield self._document._from_son(record, _auto_dereference=self._auto_dereference)
 					last = record['_id']
-				
-				if timeout and time() >= end:
-					return
-			
+
 			if last:
 				query.update(_id={"$gt": last})
 
