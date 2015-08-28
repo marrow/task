@@ -64,8 +64,7 @@ class TaskFuture(Future):
 		return self.task.wait(timeout).exception
 
 	def set_running_or_notify_cancel(self):
-		# return self.task.set_running_or_notify_cancel()
-		return True
+		return self.task.set_running_or_notify_cancel()
 
 	def set_result(self, result):
 		self.task.set_result(result)

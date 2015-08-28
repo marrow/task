@@ -11,6 +11,7 @@ from mongoengine import Document, IntField
 from marrow.task import task as task_decorator
 from marrow.task import Task
 from marrow.task.compat import range, py2, py33
+from marrow.task.exc import TimeoutError
 
 
 class TestModel(Document):
@@ -52,9 +53,9 @@ def map_subject(god):
 
 
 @task_decorator
-def sleep_subject(a):
+def sleep_subject(a, sleep=1):
 	import time
-	time.sleep(1)
+	time.sleep(sleep)
 	return a
 
 
@@ -215,6 +216,14 @@ class TestTasks(object):
 		assert connection.testing.test_data.find_one()['callback_counter'] == 11
 		runner.stop_test_runner()
 
+	def test_submit(self, runner):
+		future = Task.submit(subject, 2)
+		assert future.result() == 84
+		future2 = Task.submit(sleep_subject, 42, 10)
+		with pytest.raises(TimeoutError):
+			future2.result(1)
+		runner.stop_test_runner()
+
 	def test_map(self, runner):
 		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
 		count = Task.objects.count()
@@ -224,8 +233,6 @@ class TestTasks(object):
 		runner.stop_test_runner()
 
 	def test_map_timeout(self, runner):
-		from marrow.task.exc import TimeoutError
-
 		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
 		result = Task.map(sleep_subject, data, timeout=1)
 		with pytest.raises(TimeoutError):

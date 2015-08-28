@@ -455,14 +455,14 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	@classmethod
 	def submit(cls, fn, *args, **kwargs):
 		"""Submit a task for execution as soon as possible."""
-		
+		from marrow.task.future import TaskFuture
+
 		log.info("", fn)
 		
 		record = cls(callable=fn, args=args, kwargs=kwargs).save()  # Step one, create and save a pending task record.
 		record.signal(TaskAdded)  # Step two, notify everyone waiting for tasks.
 		
-		# Because the record acts like a Futures object, we can just return it.
-		return record
+		return TaskFuture(record)
 	
 	@classmethod
 	def at(cls, dt, fn, *args, **kw):
