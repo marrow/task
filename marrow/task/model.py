@@ -101,6 +101,7 @@ class GeneratorTaskIterator(object):
 		else:
 			result = self.process_iteration_result(item, TaskProgress.NORMAL)
 			Task.objects(id=self.task.id).update(push__task_result=result)
+			self.task._invoke_callbacks(iteration=True)
 			return result
 
 	__next__ = next
@@ -330,10 +331,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def exception(self):
 		return self.exception_info[0]
 
-	def _invoke_callbacks(self):
+	def _invoke_callbacks(self, iteration=False):
 		from marrow.task import task
 
-		for callback in self.callbacks:
+		callbacks = self.options.get('iteration_callbacks', []) if iteration else self.callbacks
+		for callback in callbacks:
 			task(callback).defer(self)
 
 	def _complete_task(self):
@@ -375,15 +377,21 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		self._complete_task()
 		return result
 
-	def add_done_callback(self, callback):
+	def add_callback(self, callback, iteration=False):
 		from marrow.task import task
 
 		if self.done or self.cancelled:
 			task(callback).defer(self)
 			return
 
-		self.callbacks.append(callback)
-		self.save()
+		if not iteration:
+			self.callbacks.append(callback)
+			self.save()
+			return
+
+		prf = PythonReferenceField()
+		prf.validate(callback)
+		Task.objects(id=self.id).update(push__options__iteration_callbacks=prf.to_mongo(callback))
 
 	def wait(self, timeout=None):
 		for event in TaskFinished.objects(task=self).tail(timeout):

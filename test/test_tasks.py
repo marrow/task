@@ -200,6 +200,21 @@ class TestTasks(object):
 		assert 'FAILURE' in str(task.exception)
 		runner.stop_test_runner(5)
 
+	def test_generator_task_iteration_callback(self, connection, runner):
+		from time import sleep
+
+		connection.testing.test_data.insert({'callback_counter': 0})
+		task = generator_subject.defer()
+		task.add_callback(task_callback, iteration=True)
+		assert_task(task)
+		assert list(task) == list(range(10))
+		sleep(1)
+		assert connection.testing.test_data.find_one()['callback_counter'] == 10
+		task.add_callback(task_callback)
+		sleep(1)
+		assert connection.testing.test_data.find_one()['callback_counter'] == 11
+		runner.stop_test_runner()
+
 	def test_map(self, runner):
 		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
 		count = Task.objects.count()
@@ -220,7 +235,7 @@ class TestTasks(object):
 	def test_callback(self, connection, runner):
 		connection.testing.test_data.insert({'callback_counter': 0})
 		task = sleep_subject.defer(42)
-		task.add_done_callback(task_callback)
+		task.add_callback(task_callback)
 		assert_task(task)
 		import time
 		time.sleep(1)

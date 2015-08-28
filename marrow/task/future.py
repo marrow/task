@@ -55,7 +55,7 @@ class TaskFuture(Future):
 		return bool(Task.objects.finished(id=self._task))
 	
 	def add_done_callback(self, fn):
-		self.task.add_done_callback(fn)
+		self.task.add_callback(fn, iteration=False)
 	
 	def result(self, timeout=None):
 		return self.task.wait(timeout).result
