@@ -86,5 +86,11 @@ setup(
 	zip_safe = False,
 	cmdclass = dict(
 			test = PyTest,
-		)
+		),
+	entry_points = {
+		'console_scripts': [
+			'marrow.task = marrow.task.runner:default_runner',
+			'marrow.task.test = marrow.task.runner:test_func',
+		]
+	}
 )

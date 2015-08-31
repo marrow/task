@@ -3,7 +3,6 @@
 from __future__ import unicode_literals
 
 import pickle
-from types import MethodType
 from logging import getLogger
 from inspect import isgeneratorfunction, isgenerator
 from pytz import utc
@@ -141,10 +140,6 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	
 	# Python Magic Methods
 
-	def __init__(self, *args, **kwargs):
-		super(Task, self).__init__(*args, **kwargs)
-		self.cancel = MethodType(lambda self: self.__class__.cancel(self), self, self.__class__)
-	
 	def __repr__(self, inner=None):
 		if inner:
 			return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.creator, inner)

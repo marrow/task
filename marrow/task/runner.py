@@ -417,6 +417,7 @@ def run(timeout=None, message_queue=None):
 		task.signal(TaskScheduled, when=date_time)
 
 	# Main loop
+	StopRunner.objects(processed=False).update(set__processed=True)
 	for event in Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False).tail(timeout):
 	# for event in Message.objects(processed=False).tail(timeout):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
@@ -442,3 +443,18 @@ def run(timeout=None, message_queue=None):
 
 		if handler(task, event) is False:
 			break
+
+
+def default_runner():
+	import signal
+
+	runner = Runner('./example/config.yaml')
+
+	def handler(sig, fr):
+		runner.shutdown()
+
+	signal.signal(signal.SIGINT, handler)
+
+	runner.run()
+	for p in runner.executor._processes:
+		p.join()
