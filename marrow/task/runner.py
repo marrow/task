@@ -277,7 +277,7 @@ class Runner(object):
 		while True:
 			try:
 				data = self.message_queue.get(True)
-			except IOError:
+			except (IOError, EOFError):
 				return
 
 			if data is None:
@@ -351,20 +351,42 @@ class Runner(object):
 		if not workers:
 			return 0
 
-		return sum(worker.is_alive() for worker in (itervalues(workers) if isinstance(workers, dict) else workers))
+		result = 0
+
+		for worker in (itervalues(workers) if isinstance(workers, dict) else workers):
+			try:
+				result += int(worker.is_alive())
+			except AssertionError:
+				continue
+
+		return result
 
 	def shutdown(self, wait=None):
-		for i in range(self.get_alive_workers_count()):
-			StopRunner.objects.create()
-		self.executor.shutdown(wait)
+		if wait:
+			for i in range(self.get_alive_workers_count()):
+				StopRunner.objects.create()
+		elif querysets:
+			for queryset in querysets:
+				queryset.interrupt()
+
+		self.executor.shutdown(wait=False)
 		try:
 			self.message_queue.put(None)
 		except Exception:
 			pass
-		self.message_queue.close()
-		self.message_queue.join_thread()
+		try:
+			self.message_queue.close()
+		except Exception:
+			pass
+		try:
+			self.message_queue.join_thread()
+		except Exception:
+			pass
 		self.message_thread.join()
 		self.logger.info("SHUTDOWN")
+
+
+querysets = []
 
 
 def run(timeout=None, message_queue=None):
@@ -417,8 +439,17 @@ def run(timeout=None, message_queue=None):
 		task.signal(TaskScheduled, when=date_time)
 
 	# Main loop
+	import signal
+
+	queryset = Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False)
+
+	try:
+		signal.signal(signal.SIGINT, lambda s, f: queryset.interrupt())
+	except ValueError:
+		querysets.append(queryset)
+
 	StopRunner.objects(processed=False).update(set__processed=True)
-	for event in Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False).tail(timeout):
+	for event in queryset.tail(timeout):
 	# for event in Message.objects(processed=False).tail(timeout):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
 			continue
@@ -447,8 +478,20 @@ def run(timeout=None, message_queue=None):
 
 def default_runner():
 	import signal
+	import sys
+	import os.path
 
-	runner = Runner('./example/config.yaml')
+	config = sys.argv[1] if len(sys.argv) > 1 else None
+	if config is not None:
+		config = os.path.expandvars(os.path.expanduser(config))
+
+		if not os.path.exists(config):
+			sys.exit('Error: Config file is not exists.')
+
+		if not os.path.isfile(config):
+			sys.exit('Error: Config must be a file.')
+
+	runner = Runner(config)
 
 	def handler(sig, fr):
 		runner.shutdown()
@@ -456,5 +499,12 @@ def default_runner():
 	signal.signal(signal.SIGINT, handler)
 
 	runner.run()
-	for p in runner.executor._processes:
-		p.join()
+
+	if isinstance(runner.executor, ProcessPoolExecutor):
+		ex = runner.executor._processes
+		for p in ex:
+			p.join()
+	else:
+		while any(th.is_alive() for th in runner.executor._threads):
+			import time; time.sleep(0.1)
+
