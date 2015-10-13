@@ -1,11 +1,14 @@
 language: python
 
-env:
-  - TOXENV=pypy
-  - TOXENV=py27
-  - TOXENV=py32
-  - TOXENV=py33
-  - TOXENV=py34
+python:
+  - pypy
+  - pypy3
+  - "2.6"
+  - "2.7"
+  - "3.2"
+  - "3.3"
+  - "3.4"
+  - "3.5"
 
 install: travis_retry .travis/install.sh
 
