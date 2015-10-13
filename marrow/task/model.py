@@ -10,7 +10,7 @@ from datetime import datetime
 from concurrent.futures import CancelledError
 from bson import ObjectId
 from mongoengine import (Document, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField,
-						 GenericReferenceField)
+						 GenericReferenceField, DoesNotExist)
 from wrapt.wrappers import FunctionWrapper
 
 from .compat import py2, py33, unicode, range, zip
@@ -303,7 +303,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if not self.done:
 			self.wait()
 
-		result, exception, freq = Task.objects.scalar('task_result', 'task_exception', 'time__frequency').get(id=self.id)
+		try:
+			result, exception, freq = Task.objects.scalar('task_result', 'task_exception', 'time__frequency').get(id=self.id)
+		except DoesNotExist:
+			return None
+
 		if freq is None:
 			if exception is not None:
 				raise decode(exception['exception'])
@@ -322,7 +326,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	@property
 	def exception_info(self):
-		exc = Task.objects.scalar('task_exception').get(id=self.id)
+		try:
+			exc = Task.objects.scalar('task_exception').get(id=self.id)
+		except DoesNotExist:
+			return None, None
 		if exc is None:
 			return None, None
 		return decode(exc['exception']), exc['traceback']
@@ -344,7 +351,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		exception, result = Task.objects.scalar('task_exception', 'task_result').get(id=self.id)
 		self.signal(TaskComplete, success=self.task_exception is None, result=exception or result)
 
-		self.reload('callbacks', 'time')
+		try:
+			self.reload('callbacks', 'time')
+		except DoesNotExist:
+			return
+
 		if self.successful:
 			self._invoke_callbacks()
 

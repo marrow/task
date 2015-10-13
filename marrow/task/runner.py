@@ -23,7 +23,7 @@ try:
 except ImportError:
 	from yaml import Loader
 
-from mongoengine import connect
+from mongoengine import connect, DoesNotExist
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
@@ -67,18 +67,18 @@ _runners = None
 
 
 def _initialize():
-		global _manager, _runners
+	global _manager, _runners
 
-		if _manager is not None:
-			return
+	if _manager is not None:
+		return
 
-		_manager = CustomManager()
-		_manager.register('Queue', Queue)
-		_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
-		_manager.register('Value', Value, ValueProxy)
-		_manager.start()
+	_manager = CustomManager()
+	_manager.register('Queue', Queue)
+	_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
+	_manager.register('Value', Value, ValueProxy)
+	_manager.start()
 
-		_runners = _manager.RunnersStorage()
+	_runners = _manager.RunnersStorage()
 
 
 class RunnersStorage(object):
@@ -167,6 +167,8 @@ class RunningTask(object):
 			from marrow.task.exc import TimeoutError
 
 			exc_type, exc_val, tb = sys.exc_info()
+			if isinstance(exc_val, DoesNotExist):
+				exc_val = DoesNotExist(*exc_val.args)
 			tb = ''.join(traceback.format_tb(tb))
 			exc = (exc_type, exc_val, tb)
 
@@ -187,7 +189,10 @@ class RunningTask(object):
 
 	def get_task(self):
 		from marrow.task.model import Task
-		return Task.objects.get(id=self.task_id)
+		try:
+			return Task.objects.get(id=self.task_id)
+		except DoesNotExist:
+			return None
 
 
 class RunningRescheduled(RunningTask):
@@ -299,7 +304,7 @@ class Runner(object):
 			exc_type, exc_val, tb, task_id, exc_kind = data
 			error_msg = '%s(%s) in %stask %s:\n%s' % (
 				exc_type.__name__, exc_val,
-				'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
+				'runner at ' if exc_kind == RUNNER_EXCEPTION else '',
 				task_id, tb)
 			self.logger.exception(error_msg)
 
