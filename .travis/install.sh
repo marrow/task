@@ -11,6 +11,6 @@ pip install tox
 pip install tox-travis
 pip install python-coveralls
 pip install pytest-cov
-pip install pyflakes
+pip install pyflakes pytest-flakes
 pip install pytest_cagoule
 pip install pytest-spec
