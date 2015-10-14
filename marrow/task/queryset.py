@@ -12,11 +12,13 @@ class CappedQuerySet(QuerySet):
 	def __init__(self, *args, **kwargs):
 		super(CappedQuerySet, self).__init__(*args, **kwargs)
 		self._running = True
+		self._flag = None
 
 	def interrupt(self):
 		"""Set `_running` flag to False, thus stop fetching database after current iteration."""
-		# TODO: Make queryset's `_running` bindable to some object, so it can be controlled from another process.
 		self._running = False
+		if self._flag is not None:
+			self._flag.value = False
 
 	def tail(self, timeout=None):
 		"""A generator which will block and yield entries as they are added to the collection.
@@ -48,10 +50,10 @@ class CappedQuerySet(QuerySet):
 		# We track the last seen ID to allow us to efficiently re-query from where we left off.
 		last = None
 
-		while self._running:
+		while getattr(self._flag, 'value', self._running):
 			cursor = collection.find(query, tailable=True, await_data=True, **q._cursor_args)
 			
-			while self._running:
+			while getattr(self._flag, 'value', self._running):
 				try:
 					record = next(cursor)
 				except StopIteration:

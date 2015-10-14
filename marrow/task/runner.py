@@ -32,7 +32,7 @@ from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
 
 LISTENED_MESSAGES = [
-	StopRunner,
+	# StopRunner,
 	TaskAdded,
 	TaskScheduled,
 	TaskAddedRescheduled,
@@ -278,6 +278,8 @@ class Runner(object):
 		self.message_queue = _manager.Queue()
 		self.message_thread = None
 
+		self.run_flags = []
+
 	def _handle_messages(self):
 		while True:
 			try:
@@ -308,12 +310,25 @@ class Runner(object):
 				task_id, tb)
 			self.logger.exception(error_msg)
 
-	def run(self):
+	def run(self, block=False):
+		import ctypes
+
 		self.message_thread = Thread(target=self._handle_messages)
 		self.message_thread.start()
 
 		for i in range(self.executor._max_workers):
-			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue)
+			flag = _manager.Value(ctypes.c_bool, True)
+			self.run_flags.append(flag)
+			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue, run_flag=flag)
+
+		if block:
+			if isinstance(self.executor, ProcessPoolExecutor):
+				ex = self.executor._processes
+				for p in ex:
+					p.join()
+			else:
+				while any(th.is_alive() for th in self.executor._threads):
+					import time; time.sleep(0.1)
 
 	@staticmethod
 	def _get_config(config):
@@ -367,13 +382,15 @@ class Runner(object):
 		return result
 
 	def shutdown(self, wait=None):
-		if wait:
-			for i in range(self.get_alive_workers_count()):
-				StopRunner.objects.create()
-		elif querysets:
-			for queryset in querysets:
-				queryset.interrupt()
-
+		for flag in self.run_flags:
+			flag.value = False
+		# if wait:
+		# 	for i in range(self.get_alive_workers_count()):
+		# 		StopRunner.objects.create()
+		# elif querysets:
+		# 	for queryset in querysets:
+		# 		queryset.interrupt()
+		#
 		self.executor.shutdown(wait=False)
 		try:
 			self.message_queue.put(None)
@@ -394,7 +411,7 @@ class Runner(object):
 querysets = []
 
 
-def run(timeout=None, message_queue=None):
+def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 	scheduler = BackgroundScheduler(timezone=utc)
 	scheduler.start()
 
@@ -447,13 +464,19 @@ def run(timeout=None, message_queue=None):
 	import signal
 
 	queryset = Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False)
+	queryset._flag = run_flag
 
-	try:
-		signal.signal(signal.SIGINT, lambda s, f: queryset.interrupt())
-	except ValueError:
-		querysets.append(queryset)
+	# def inner_handler(s, f):
+	# 	pass
 
-	StopRunner.objects(processed=False).update(set__processed=True)
+	# try:
+	# 	signal.signal(signal.SIGINT, inner_handler)
+	# except ValueError:
+	# 	print('UNSUCCESSFULL')
+	# 	pass
+		# querysets.append(queryset)
+
+	# StopRunner.objects(processed=False).update(set__processed=True)
 	for event in queryset.tail(timeout):
 	# for event in Message.objects(processed=False).tail(timeout):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
@@ -461,9 +484,9 @@ def run(timeout=None, message_queue=None):
 
 		message_queue.put('Process %r' % event)
 
-		if isinstance(event, StopRunner):
-			message_queue.put('Runner is stopped')
-			return
+		# if isinstance(event, StopRunner):
+		# 	message_queue.put('Runner is stopped')
+		# 	return
 
 		if not isinstance(event, TaskMessage):
 			continue
@@ -488,7 +511,7 @@ def default_runner():
 
 	config = sys.argv[1] if len(sys.argv) > 1 else None
 	if config is not None:
-		config = os.path.expandvars(os.path.expanduser(config))
+		config = os.path.expanduser(os.path.expandvars(config))
 
 		if not os.path.exists(config):
 			sys.exit('Error: Config file is not exists.')
@@ -499,17 +522,23 @@ def default_runner():
 	runner = Runner(config)
 
 	def handler(sig, fr):
+		import sys
+		sys.exit(0)
+		# runner.shutdown()
+
+	# signal.signal(signal.SIGINT, handler)
+
+	try:
+		runner.run(block=True)
+	finally:
+		# import ipdb; ipdb.set_trace()
 		runner.shutdown()
 
-	signal.signal(signal.SIGINT, handler)
-
-	runner.run()
-
-	if isinstance(runner.executor, ProcessPoolExecutor):
-		ex = runner.executor._processes
-		for p in ex:
-			p.join()
-	else:
-		while any(th.is_alive() for th in runner.executor._threads):
-			import time; time.sleep(0.1)
+	# if isinstance(runner.executor, ProcessPoolExecutor):
+	# 	ex = runner.executor._processes
+	# 	for p in ex:
+	# 		p.join()
+	# else:
+	# 	while any(th.is_alive() for th in runner.executor._threads):
+	# 		import time; time.sleep(0.1)
 
