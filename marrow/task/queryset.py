@@ -3,7 +3,12 @@
 from __future__ import print_function, unicode_literals
 
 from time import time
+from logging import getLogger
+
 from mongoengine import QuerySet, Q
+
+
+log = getLogger(__name__)
 
 
 class CappedQuerySet(QuerySet):
@@ -121,3 +126,34 @@ class TaskQuerySet(QuerySet):
 		"""Search for tasks that were explicitly cancelled."""
 		
 		return self.clone().filter(time__cancelled__ne=None).filter(*q_objs, **query)
+
+	def cancel(self, *q_objs, **query):
+		"""Cancel selected tasks."""
+
+		from datetime import datetime
+		from pytz import utc
+		from .message import TaskCancelled
+
+		count = 0
+
+		for task in self.clone().filter(*q_objs, **query).scalar('id'):
+			if self.scalar('time__frequency').filter(id=task) is None:
+				qkws = {'time__executed': None}
+			else:
+				qkws = {}
+
+			if not self.filter(id=task, **qkws).update(set__time__cancelled=datetime.utcnow().replace(tzinfo=utc)):
+				continue
+
+			for i in range(3):  # We attempt three times to notify the queue.
+				try:
+					TaskCancelled(task=task).save()
+				except:
+					log.exception("Unable to broadcast cancellation of task {0}.".format(task),
+							extra = dict(task=task, attempt=i + 1))
+				else:
+					count += 1
+					log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
+					break
+
+		return count

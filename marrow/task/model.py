@@ -552,41 +552,13 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	# Futures-compatible future API.
 	
-	@classmethod
-	def cancel(cls, task):
+	def cancel(self):
 		"""Cancel the task if possible.
 		
 		Returns True if the task was cancelled, False otherwise.
 		"""
 		
-		task = ObjectId(getattr(task, 'id', task))
-		
-		log.debug("Attempting to cancel task {0}.".format(task), extra=dict(task=task))
-
-		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
-		# If the task has already been run (completed or not) it's too late to cancel it.
-		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cancellation.
-		if Task.objects.scalar('time__frequency').get(id=task) is None:
-			qkws = {'time__executed': None}
-		else:
-			qkws = {}
-		if not Task.objects(id=task, **qkws).update(set__time__cancelled=utcnow()):
-			return False
-		
-		for i in range(3):  # We attempt three times to notify the queue.
-			try:
-				TaskCancelled(task=task).save()
-			except:
-				log.exception("Unable to broadcast cancellation of task {0}.".format(task),
-						extra = dict(task=task, attempt=i + 1))
-			else:
-				break
-		else:
-			return False
-		
-		log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
-
-		return True
+		return bool(Task.objects.cancel(id=self.id))
 
 	# Properties
 	@property

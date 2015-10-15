@@ -306,7 +306,7 @@ class TestTasks(object):
 		sleep(4)
 		assert task.result == 1
 		sleep(9)
-		Task.cancel(task)
+		task.cancel()
 		assert list(task) == [1, 2, 3, 4]
 		assert task.result == 4
 		runner.stop_test_runner()
