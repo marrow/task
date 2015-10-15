@@ -4,21 +4,32 @@ from __future__ import unicode_literals, print_function
 
 import threading
 from multiprocessing import Manager
+from time import sleep
 
 import pytest
 from mongoengine import Document, IntField
 
 from marrow.task import task as task_decorator
 from marrow.task import Task
-from marrow.task.compat import range, py2, py33
+from marrow.task.compat import range, py33
 from marrow.task.exc import TimeoutError
 
 
-class TestModel(Document):
+class ModelForTest(Document):
 	data_field = IntField()
 
 	def method(self, arg):
 		return self.data_field * arg
+
+
+def check(predicate):
+	count = 0
+	while count < 10:
+		sleep(0.5)
+		if predicate():
+			return True
+		count += 1
+	return False
 
 
 @task_decorator
@@ -202,18 +213,14 @@ class TestTasks(object):
 		runner.stop_test_runner(5)
 
 	def test_generator_task_iteration_callback(self, connection, runner):
-		from time import sleep
-
 		connection.testing.test_data.insert({'callback_counter': 0})
 		task = generator_subject.defer()
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		sleep(1)
-		assert connection.testing.test_data.find_one()['callback_counter'] == 10
+		assert check(lambda: connection.testing.test_data.find_one()['callback_counter'] == 10)
 		task.add_callback(task_callback)
-		sleep(1)
-		assert connection.testing.test_data.find_one()['callback_counter'] == 11
+		assert check(lambda: connection.testing.test_data.find_one()['callback_counter'] == 11)
 		runner.stop_test_runner()
 
 	def test_submit(self, runner):
@@ -244,9 +251,7 @@ class TestTasks(object):
 		task = sleep_subject.defer(42)
 		task.add_callback(task_callback)
 		assert_task(task)
-		import time
-		time.sleep(1)
-		assert connection.testing.test_data.find_one()['callback_counter'] == 1
+		assert check(lambda: connection.testing.test_data.find_one()['callback_counter'] == 1)
 		runner.stop_test_runner()
 
 	def test_context(self, runner):
@@ -283,7 +288,7 @@ class TestTasks(object):
 		assert isinstance(task.release(force=True), Task)
 
 	def test_instance_method(self, runner):
-		instance = TestModel.objects.create(data_field=42)
+		instance = ModelForTest.objects.create(data_field=42)
 		task = task_decorator(instance.method).defer(2)
 		assert task.result == 84
 		runner.stop_test_runner()

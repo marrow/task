@@ -3,7 +3,6 @@
 import pytest
 import mongoengine
 
-import threading
 from functools import partial
 
 from marrow.task.message import Message

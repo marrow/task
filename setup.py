@@ -88,6 +88,10 @@ setup(
 			'futures.executor': [
 					'thread = concurrent.futures:ThreadPoolExecutor',
 					'process = concurrent.futures:ProcessPoolExecutor',
+				],
+			'console_scripts': [
+					'marrow.task = marrow.task.runner:default_runner',
+					'marrow.task.test = marrow.task.runner:test_func',
 				]
 		},
 
@@ -95,10 +99,4 @@ setup(
 	cmdclass = dict(
 			test = PyTest,
 		),
-	entry_points = {
-		'console_scripts': [
-			'marrow.task = marrow.task.runner:default_runner',
-			'marrow.task.test = marrow.task.runner:test_func',
-		]
-	}
 )

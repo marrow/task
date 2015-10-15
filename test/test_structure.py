@@ -2,15 +2,8 @@
 
 from __future__ import unicode_literals
 
-from time import time, sleep
-from pytest import fixture
-from random import choice
-from threading import Thread
-from mongoengine import Document, StringField, IntField
-
 from marrow.task.compat import str, unicode
-from marrow.task.structure import Owner, Retry, Progress
-
+from marrow.task.structure import Owner
 
 
 class TestOwner(object):
