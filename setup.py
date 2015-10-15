@@ -38,7 +38,8 @@ class PyTest(TestCommand):
 
 here = os.path.abspath(os.path.dirname(__file__))
 
-tests_require = ['pytest', 'pytest-cov']
+tests_require = ['pytest', 'pytest-cov', 'pytest-spec', 'pytest_cagoule', 'pytest-flakes']
+
 
 setup(
 	name = "marrow.task",
@@ -83,6 +84,13 @@ setup(
 	
 	tests_require = tests_require,
 	
+	entry_points = {
+			'futures.executor': [
+					'thread = concurrent.futures:ThreadPoolExecutor',
+					'process = concurrent.futures:ProcessPoolExecutor',
+				]
+		},
+
 	zip_safe = False,
 	cmdclass = dict(
 			test = PyTest,

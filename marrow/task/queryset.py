@@ -111,7 +111,7 @@ class TaskQuerySet(QuerySet):
 	def failed(self, *q_objs, **query):
 		"""Search for tasks that have failed."""
 		
-		return self.clone().filter(exception__ne=None).filter(*q_objs, **query)
+		return self.clone().filter(task_exception__ne=None).filter(*q_objs, **query)
 	
 	def finished(self, *q_objs, **query):
 		"""Search for tasks that have finished, successfully or not."""
