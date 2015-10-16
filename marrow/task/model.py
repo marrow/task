@@ -4,11 +4,10 @@ from __future__ import unicode_literals
 
 import pickle
 from logging import getLogger
-from inspect import isgeneratorfunction, isgenerator
+from inspect import isgenerator
 from pytz import utc
 from datetime import datetime
 from concurrent.futures import CancelledError
-from bson import ObjectId
 from mongoengine import (Document, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField,
 						 GenericReferenceField, DoesNotExist)
 from wrapt.wrappers import FunctionWrapper
@@ -18,7 +17,7 @@ from .exc import TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
 from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, StopRunner,
-					  TaskCompletedPeriodic, ReschedulePeriodic, TaskProgress)
+					  TaskCompletedPeriodic, TaskProgress)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -206,9 +205,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				raise StopIteration
 
 	def iterator(self):
-		"""Iterate the results of a generator task.
+		"""Iterate the results of a generator or periodic task.
 
-		It is an error condition to attempt to iterate a non-generator task.
+		It is an error condition to attempt to iterate a non-generator or non-periodic task.
 		"""
 		if not (self.generator or self.time.frequency):
 			raise ValueError('Only periodic and generator tasks are iterable.')

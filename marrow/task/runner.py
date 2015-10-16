@@ -9,11 +9,6 @@ from multiprocessing import Queue
 from multiprocessing.managers import BaseManager, Value, ValueProxy
 from threading import Thread
 
-try:
-	import Queue as queue_module
-except ImportError:
-	import queue as queue_module
-
 from pytz import utc
 from apscheduler.schedulers.background import BackgroundScheduler
 from yaml import load
@@ -26,7 +21,7 @@ except ImportError:
 from mongoengine import connect, DoesNotExist
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
+from marrow.task.message import (TaskAdded, Message, IterationRequest, TaskMessage,
 								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic)
 from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
@@ -164,7 +159,6 @@ class RunningTask(object):
 			result = task.handle()
 		except Exception as exc:
 			import sys, traceback
-			from marrow.task.exc import TimeoutError
 
 			exc_type, exc_val, tb = sys.exc_info()
 			if isinstance(exc_val, DoesNotExist):
@@ -197,7 +191,6 @@ class RunningTask(object):
 
 class RunningRescheduled(RunningTask):
 	def handle(self):
-		from marrow.task.model import Task
 		task = self.get_task()
 		task.acquire()
 		result = super(RunningRescheduled, self).handle()
@@ -461,7 +454,7 @@ def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 		task.signal(TaskScheduled, when=date_time)
 
 	# Main loop
-	import signal
+	# import signal
 
 	queryset = Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False)
 	queryset._flag = run_flag
@@ -505,7 +498,7 @@ def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 
 
 def default_runner():
-	import signal
+	# import signal
 	import sys
 	import os.path
 

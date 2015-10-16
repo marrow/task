@@ -9,7 +9,7 @@ from __future__ import unicode_literals, print_function
 
 
 from mongoengine import connect
-from marrow.task import task, Task
+from marrow.task import task
 
 
 

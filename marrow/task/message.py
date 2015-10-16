@@ -4,8 +4,7 @@ from __future__ import unicode_literals
 
 from datetime import datetime
 
-from pytz import utc
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
+from mongoengine import Document, ReferenceField, IntField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
 
 from .compat import py2, py3, unicode
 from .queryset import CappedQuerySet

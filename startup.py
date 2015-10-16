@@ -9,7 +9,6 @@ from marrow.task.message import *
 from marrow.task.runner import Runner
 from marrow.task.future import TaskFuture
 
-from example.runner import run
 from example.basic import hello, count, farewell
 
 
@@ -45,7 +44,7 @@ runner.stop_test_runner = stop
 # request.addfinalizer(stop)
 
 #th.start()
-t = test.defer(42).result
+# t = test.defer(42).result
 #runner.stop_test_runner()
 # return runner
 

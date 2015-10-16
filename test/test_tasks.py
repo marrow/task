@@ -22,8 +22,9 @@ class ModelForTest(Document):
 		return self.data_field * arg
 
 
-def check(predicate):
+def check(predicate, min=0):
 	count = 0
+	sleep(min)
 	while count < 10:
 		sleep(0.5)
 		if predicate():
@@ -305,12 +306,12 @@ class TestTasks(object):
 		runner.stop_test_runner()
 
 	def test_every_invocation(self, connection, runner):
-		from time import sleep
+		from marrow.task.message import TaskComplete
+
 		connection.testing.test_data.insert({'every_counter': 0})
 		task = every_subject.every(3)
-		sleep(4)
-		assert task.result == 1
-		sleep(9)
+		assert check(lambda: task.result == 1, min=4)
+		assert check(lambda: TaskComplete.objects(task=task).count() == 4, min=9)
 		task.cancel()
 		assert list(task) == [1, 2, 3, 4]
 		assert task.result == 4

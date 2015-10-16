@@ -2,14 +2,10 @@
 
 """"""
 
-from concurrent.futures._base import PENDING, RUNNING, CANCELLED, FINISHED, Error, CancelledError, TimeoutError, Future
-from concurrent.futures.thread import ThreadPoolExecutor
-from concurrent.futures.process import ProcessPoolExecutor
-from marrow.package.canonical import name
-from marrow.package.loader import load
+from concurrent.futures._base import Future
 
 from .model import Task
-from .message import TaskMessage, TaskFinished, TaskCancelled, TaskAdded
+from .message import TaskMessage
 
 
 log = __import__('logging').getLogger(__name__)
