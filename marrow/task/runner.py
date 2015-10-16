@@ -279,6 +279,8 @@ class Runner(object):
 				data = self.message_queue.get(True)
 			except (IOError, EOFError):
 				return
+			except TypeError:
+				continue
 
 			if data is None:
 				return

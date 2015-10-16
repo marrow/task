@@ -86,10 +86,8 @@ def initialize():
 
 
 def task_callback(task):
-	import mongoengine
-
 	result = "Callback for %s" % task.id
-	mongoengine.connect('testing').testing.test_data.update({}, {'$inc': {'callback_counter': 1}})
+	ModelForTest.objects.update(inc__data_field=1)
 	return result
 
 
@@ -105,10 +103,8 @@ def exception_subject():
 
 @task_decorator
 def every_subject():
-	from mongoengine import connect
-	collection = connect('testing').testing.test_data
-	collection.update({}, {'$inc': {'every_counter': 1}})
-	return collection.find_one()['every_counter']
+	ModelForTest.objects.update(inc__data_field=1)
+	return ModelForTest.objects.scalar('data_field').first()
 
 
 @pytest.fixture(scope="function")
@@ -214,14 +210,14 @@ class TestTasks(object):
 		runner.stop_test_runner(5)
 
 	def test_generator_task_iteration_callback(self, connection, runner):
-		connection.testing.test_data.insert({'callback_counter': 0})
+		ModelForTest.objects.create(data_field=0)
 		task = generator_subject.defer()
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		assert check(lambda: connection.testing.test_data.find_one()['callback_counter'] == 10)
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == 10)
 		task.add_callback(task_callback)
-		assert check(lambda: connection.testing.test_data.find_one()['callback_counter'] == 11)
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == 11)
 		runner.stop_test_runner()
 
 	def test_submit(self, runner):
@@ -248,11 +244,11 @@ class TestTasks(object):
 		runner.stop_test_runner(True)
 
 	def test_callback(self, connection, runner):
-		connection.testing.test_data.insert({'callback_counter': 0})
+		ModelForTest.objects.create(data_field=0)
 		task = sleep_subject.defer(42)
 		task.add_callback(task_callback)
 		assert_task(task)
-		assert check(lambda: connection.testing.test_data.find_one()['callback_counter'] == 1)
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == 1)
 		runner.stop_test_runner()
 
 	def test_context(self, runner):
@@ -308,7 +304,7 @@ class TestTasks(object):
 	def test_every_invocation(self, connection, runner):
 		from marrow.task.message import TaskComplete
 
-		connection.testing.test_data.insert({'every_counter': 0})
+		ModelForTest.objects.create(data_field=0)
 		task = every_subject.every(3)
 		assert check(lambda: task.result == 1, min=4)
 		assert check(lambda: TaskComplete.objects(task=task).count() == 4, min=9)
@@ -321,7 +317,7 @@ class TestTasks(object):
 		from datetime import datetime, timedelta
 		import time
 
-		connection.testing.test_data.insert({'every_counter': 0})
+		ModelForTest.objects.create(data_field=0)
 		start = datetime.now() + timedelta(seconds=5)
 		end = start + timedelta(seconds=6)
 		total_start = time.time()
