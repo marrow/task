@@ -39,7 +39,7 @@ def encode(obj):
 
 def decode(string):
 	if py2:
-		string = string.decode('ascii')
+		string = str(string.decode('ascii'))
 	return pickle.loads(string)
 
 

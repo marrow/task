@@ -11,7 +11,7 @@ from mongoengine import Document, IntField
 
 from marrow.task import task as task_decorator
 from marrow.task import Task
-from marrow.task.compat import range, py33
+from marrow.task.compat import range, py33, total_seconds
 from marrow.task.exc import TimeoutError
 
 
@@ -318,11 +318,11 @@ class TestTasks(object):
 		import time
 
 		ModelForTest.objects.create(data_field=0)
-		start = datetime.now() + timedelta(seconds=5)
+		start = datetime.now() + timedelta(seconds=2)
 		end = start + timedelta(seconds=6)
 		total_start = time.time()
 		task = every_subject.every(2, starts=start, ends=end)
-		iterations = int((end - start).total_seconds() // 2)
+		iterations = int(total_seconds(end - start) // 2)
 		assert list(task) == list(range(1, iterations))
 		assert time.time() - total_start >= iterations * 2
 		runner.stop_test_runner()
