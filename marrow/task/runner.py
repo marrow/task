@@ -2,7 +2,12 @@
 
 import pickle
 import logging
-import logging.config
+
+try:
+	from logging.config import dictConfig
+except ImportError:
+	from marrow.task.compat import dictConfig
+
 from copy import deepcopy
 from datetime import datetime
 from multiprocessing import Queue
@@ -263,7 +268,7 @@ class Runner(object):
 		self._connection = None
 		self._connect(config['database'])
 
-		logging.config.dictConfig(config['logging'])
+		dictConfig(config['logging'])
 		# Get first logger name from config or class name.
 		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)

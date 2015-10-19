@@ -40,6 +40,9 @@ here = os.path.abspath(os.path.dirname(__file__))
 
 tests_require = ['pytest', 'pytest-cov', 'pytest-spec', 'pytest_cagoule', 'pytest-flakes']
 
+install_requires = [
+		'apscheduler', 'pymongo==2.8', 'mongoengine==0.9.0', 'pytz', 'marrow.package<2.0', 'wrapt<2.0', 'pyyaml'
+	] + (['futures'] if sys.version_info < (3,) else []) + (['ordereddict'] if sys.version_info < (2, 7) else [])
 
 setup(
 	name = "marrow.task",
@@ -76,7 +79,7 @@ setup(
 	include_package_data = True,
 	namespace_packages = ['marrow'],
 	
-	install_requires = ['apscheduler', 'pymongo==2.8', 'mongoengine==0.9.0', 'pytz', 'marrow.package<2.0', 'wrapt<2.0', 'pyyaml'] + (['futures'] if sys.version_info < (3,) else []),
+	install_requires = install_requires,
 	
 	extras_require = dict(
 			development = tests_require,
