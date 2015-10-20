@@ -257,13 +257,14 @@ class Runner(object):
 
 		config = self._get_config(config)
 
-		ex_cls = dict(
+		self._executor_class = dict(
 			thread = ThreadPoolExecutor,
 			process = ProcessPoolExecutor,
 		)[config['runner'].pop('use')]
+		self._executor_config = config['runner']
 
 		self.timeout = config['runner'].pop('timeout')
-		self.executor = ex_cls(**config['runner'])
+		self.executor = None
 
 		self._connection = None
 		self._connect(config['database'])
@@ -273,7 +274,7 @@ class Runner(object):
 		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)
 
-		self.message_queue = _manager.Queue()
+		self.message_queue = None
 		self.message_thread = None
 
 		self.run_flags = []
@@ -312,6 +313,12 @@ class Runner(object):
 
 	def run(self, block=False):
 		import ctypes
+
+		if self.get_alive_workers_count():
+			raise RuntimeError('Runner is already running')
+
+		self.executor = self._executor_class(**self._executor_config)
+		self.message_queue = _manager.Queue()
 
 		self.message_thread = Thread(target=self._handle_messages)
 		self.message_thread.start()
@@ -363,6 +370,9 @@ class Runner(object):
 		self._connection = connect(**config)
 
 	def get_alive_workers_count(self):
+		if self.executor is None:
+			return 0
+
 		try:
 			workers = self.executor._threads
 		except AttributeError:
