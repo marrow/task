@@ -322,7 +322,6 @@ class TestTasks(object):
 		ModelForTest.objects.create(data_field=0)
 		start = datetime.now() + timedelta(seconds=2)
 		end = start + timedelta(seconds=6)
-		total_start = time.time()
 		task = every_subject.every(2, starts=start, ends=end)
 		iterations_expected = int(total_seconds(end - start) // 2)
 		task.wait(periodic=True)
