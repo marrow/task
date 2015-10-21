@@ -317,12 +317,16 @@ class TestTasks(object):
 		from datetime import datetime, timedelta
 		import time
 
+		from marrow.task.message import TaskComplete
+
 		ModelForTest.objects.create(data_field=0)
 		start = datetime.now() + timedelta(seconds=2)
 		end = start + timedelta(seconds=6)
 		total_start = time.time()
 		task = every_subject.every(2, starts=start, ends=end)
-		iterations = int(total_seconds(end - start) // 2)
-		assert list(task) == list(range(1, iterations))
-		assert time.time() - total_start >= iterations * 2
+		iterations_expected = int(total_seconds(end - start) // 2)
+		task.wait(periodic=True)
+		iterations_count = task.get_messages(TaskComplete).count()
+		assert iterations_count <= iterations_expected
+		assert list(task) == list(range(1, iterations_count + 1))
 		runner.stop_test_runner()

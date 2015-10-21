@@ -283,7 +283,7 @@ class Runner(object):
 		while True:
 			try:
 				data = self.message_queue.get(True)
-			except (IOError, EOFError):
+			except (IOError, EOFError, OSError):
 				return
 			except TypeError:
 				continue
@@ -401,7 +401,7 @@ class Runner(object):
 		# 	for queryset in querysets:
 		# 		queryset.interrupt()
 		#
-		self.executor.shutdown(wait=False)
+		self.executor.shutdown(wait=True)
 		try:
 			self.message_queue.put(None)
 		except Exception:

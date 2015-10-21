@@ -403,10 +403,18 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		prf.validate(callback)
 		Task.objects(id=self.id).update(push__options__iteration_callbacks=prf.to_mongo(callback))
 
-	def wait(self, timeout=None):
-		for event in TaskFinished.objects(task=self).tail(timeout):
+	def wait(self, timeout=None, periodic=False):
+		msgclasses = [TaskComplete, TaskCancelled]
+		if self.time.scheduled is None and self.time.until is None:
+			periodic = False
+		if periodic:
+			msgclasses.append(TaskCompletedPeriodic)
+		msgclasses = [cls._class_name for cls in msgclasses]
+		for event in TaskFinished.objects(task=self, __raw__={'_cls': {'$in': msgclasses}}).tail(timeout):
 			if isinstance(event, TaskCancelled):
 				raise CancelledError
+			if periodic and not isinstance(event, TaskCompletedPeriodic):
+				continue
 			break
 		else:
 			raise TimeoutError('%r is timed out.' % self)
