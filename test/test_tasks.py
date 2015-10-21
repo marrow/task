@@ -315,7 +315,6 @@ class TestTasks(object):
 
 	def test_every_invocation_start_until(self, connection, runner):
 		from datetime import datetime, timedelta
-		import time
 
 		from marrow.task.message import TaskComplete
 
