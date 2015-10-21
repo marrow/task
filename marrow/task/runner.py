@@ -1,20 +1,18 @@
 # encoding: utf-8
 
-import os
 import pickle
 import logging
-import logging.config
-from functools import partial
+
+try:
+	from logging.config import dictConfig
+except ImportError:
+	from marrow.task.compat import dictConfig
+
 from copy import deepcopy
 from datetime import datetime
 from multiprocessing import Queue
-from multiprocessing.managers import BaseManager, DictProxy, Value, ValueProxy, AcquirerProxy, ListProxy
-from threading import RLock, current_thread, Thread
-
-try:
-	import Queue as queue_module
-except ImportError:
-	import queue as queue_module
+from multiprocessing.managers import BaseManager, Value, ValueProxy
+from threading import Thread
 
 from pytz import utc
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -25,12 +23,23 @@ try:
 except ImportError:
 	from yaml import Loader
 
-from mongoengine import connect
+from mongoengine import connect, DoesNotExist
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from marrow.task.message import (TaskAdded, Message, StopRunner, IterationRequest, TaskMessage,
+from marrow.task.message import (TaskAdded, Message, IterationRequest, TaskMessage,
 								 TaskScheduled, ReschedulePeriodic, TaskAddedRescheduled, TaskCompletedPeriodic)
 from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
+
+
+LISTENED_MESSAGES = [
+	# StopRunner,
+	TaskAdded,
+	TaskScheduled,
+	TaskAddedRescheduled,
+	ReschedulePeriodic
+]
+
+LISTENED_MESSAGES = [cls._class_name for cls in LISTENED_MESSAGES]
 
 
 DEFAULT_CONFIG = dict(
@@ -53,8 +62,23 @@ class CustomManager(BaseManager):
 
 _tasks_data = {}
 
-_manager = CustomManager()
-_manager.register('Queue', Queue)
+_manager = None
+_runners = None
+
+
+def _initialize():
+	global _manager, _runners
+
+	if _manager is not None:
+		return
+
+	_manager = CustomManager()
+	_manager.register('Queue', Queue)
+	_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
+	_manager.register('Value', Value, ValueProxy)
+	_manager.start()
+
+	_runners = _manager.RunnersStorage()
 
 
 class RunnersStorage(object):
@@ -79,8 +103,6 @@ class RunnersStorage(object):
 
 	def get_data(self):
 		return self._runners
-
-_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
 
 
 def _run_periodic_task(task_id):
@@ -142,9 +164,10 @@ class RunningTask(object):
 			result = task.handle()
 		except Exception as exc:
 			import sys, traceback
-			from marrow.task.exc import TimeoutError
 
 			exc_type, exc_val, tb = sys.exc_info()
+			if isinstance(exc_val, DoesNotExist):
+				exc_val = DoesNotExist(*exc_val.args)
 			tb = ''.join(traceback.format_tb(tb))
 			exc = (exc_type, exc_val, tb)
 
@@ -165,19 +188,42 @@ class RunningTask(object):
 
 	def get_task(self):
 		from marrow.task.model import Task
-		return Task.objects.get(id=self.task_id)
+		try:
+			return Task.objects.get(id=self.task_id)
+		except DoesNotExist:
+			return None
 
 
 class RunningRescheduled(RunningTask):
 	def handle(self):
-		from marrow.task.model import Task
-		Task.objects(id=self.task_id).update(set__time__completed=None)
-		return super(RunningRescheduled, self).handle()
+		task = self.get_task()
+		task.acquire()
+		result = super(RunningRescheduled, self).handle()
+		task.release()
+		return result
 
 
 class RunningGenerator(RunningTask):
 	def handle(self):
-		generator = self.handle_task().data
+		result = self.handle_task()
+		if result.kind != SUCCESS:
+			return result
+
+		generator = result.data
+		task = self.get_task()
+		for item in generator:
+			task._invoke_callbacks()
+		del _runners[self.task_id]
+		return RunStatus(SUCCESS, None)
+
+
+class RunningGeneratorWaiting(RunningGenerator):
+	def handle(self):
+		result = self.handle_task()
+		if result.kind != SUCCESS:
+			return result
+
+		generator = result.data
 		task = self.get_task()
 		for event in IterationRequest.objects(task=self.task_id).tail():
 			try:
@@ -187,19 +233,14 @@ class RunningGenerator(RunningTask):
 				break
 			else:
 				task._invoke_callbacks()
-
-
-_manager.register('Value', Value, ValueProxy)
-_manager.start()
-
-_runners = _manager.RunnersStorage()
+		return RunStatus(SUCCESS, None)
 
 
 def _process_task(task_id, message_queue=None):
 	runner = pickle.loads(_runners[task_id])
 	result = runner.handle()
 
-	if message_queue is None:
+	if message_queue is None or result is None:
 		return
 
 	if result.kind in (EXCEPTION, RUNNER_EXCEPTION):
@@ -212,65 +253,89 @@ def _process_task(task_id, message_queue=None):
 
 class Runner(object):
 	def __init__(self, config=None):
+		_initialize()
+
 		config = self._get_config(config)
 
-		ex_cls = dict(
+		self._executor_class = dict(
 			thread = ThreadPoolExecutor,
 			process = ProcessPoolExecutor,
 		)[config['runner'].pop('use')]
+		self._executor_config = config['runner']
 
 		self.timeout = config['runner'].pop('timeout')
-		self.executor = ex_cls(**config['runner'])
+		self.executor = None
 
 		self._connection = None
 		self._connect(config['database'])
 
-		logging.config.dictConfig(config['logging'])
+		dictConfig(config['logging'])
 		# Get first logger name from config or class name.
 		logger_name = next(iterkeys(config['logging'].get('loggers', {self.__class__.__name__: None})))
 		self.logger = logging.getLogger(logger_name)
-		# self.queryset = Message.objects
 
-		self.message_queue = _manager.Queue()
+		self.message_queue = None
 		self.message_thread = None
 
-	def run(self):
-		def _handle_messages():
-			while True:
-				try:
-					data = self.message_queue.get(True)
-				except IOError:
-					return
-				# 	continue
+		self.run_flags = []
 
-				if data is None:
-					return
+	def _handle_messages(self):
+		while True:
+			try:
+				data = self.message_queue.get(True)
+			except (IOError, EOFError, OSError):
+				return
+			except TypeError:
+				continue
 
-				if isinstance(data, (str, unicode)):
-					self.logger.info(data)
-					continue
+			if data is None:
+				return
 
-				if len(data) == 2:
-					if data[0] == SUCCESS:
-						self.logger.info('Completed: %s', data[1])
+			if isinstance(data, (str, unicode)):
+				self.logger.info(data)
+				continue
 
-					elif data[1] == FAILURE:
-						self.logger.warning('Failed: %s', data[1])
+			if len(data) == 2:
+				if data[0] == SUCCESS:
+					self.logger.info('Completed: %s', data[1])
 
-					continue
+				elif data[1] == FAILURE:
+					self.logger.warning('Failed: %s', data[1])
 
-				exc_type, exc_val, tb, task_id, exc_kind = data
-				error_msg = '%s(%s) in %stask %s:\n%s' % (
-					exc_type.__name__, exc_val,
-					'in runner at ' if exc_kind == RUNNER_EXCEPTION else '',
-					task_id, tb)
-				self.logger.exception(error_msg)
+				continue
 
-		self.message_thread = Thread(target=_handle_messages)
+			exc_type, exc_val, tb, task_id, exc_kind = data
+			error_msg = '%s(%s) in %stask %s:\n%s' % (
+				exc_type.__name__, exc_val,
+				'runner at ' if exc_kind == RUNNER_EXCEPTION else '',
+				task_id, tb)
+			self.logger.exception(error_msg)
+
+	def run(self, block=False):
+		import ctypes
+
+		if self.get_alive_workers_count():
+			raise RuntimeError('Runner is already running')
+
+		self.executor = self._executor_class(**self._executor_config)
+		self.message_queue = _manager.Queue()
+
+		self.message_thread = Thread(target=self._handle_messages)
 		self.message_thread.start()
 
 		for i in range(self.executor._max_workers):
-			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue)
+			flag = _manager.Value(ctypes.c_bool, True)
+			self.run_flags.append(flag)
+			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue, run_flag=flag)
+
+		if block:
+			if isinstance(self.executor, ProcessPoolExecutor):
+				ex = self.executor._processes
+				for p in ex:
+					p.join()
+			else:
+				while any(th.is_alive() for th in self.executor._threads):
+					import time; time.sleep(0.1)
 
 	@staticmethod
 	def _get_config(config):
@@ -305,6 +370,9 @@ class Runner(object):
 		self._connection = connect(**config)
 
 	def get_alive_workers_count(self):
+		if self.executor is None:
+			return 0
+
 		try:
 			workers = self.executor._threads
 		except AttributeError:
@@ -313,24 +381,47 @@ class Runner(object):
 		if not workers:
 			return 0
 
-		return sum(worker.is_alive() for worker in (itervalues(workers) if isinstance(workers, dict) else workers))
+		result = 0
+
+		for worker in (itervalues(workers) if isinstance(workers, dict) else workers):
+			try:
+				result += int(worker.is_alive())
+			except AssertionError:
+				continue
+
+		return result
 
 	def shutdown(self, wait=None):
-		for i in range(self.get_alive_workers_count()):
-			StopRunner.objects.create()
-		self.executor.shutdown(wait)
+		for flag in self.run_flags:
+			flag.value = False
+		# if wait:
+		# 	for i in range(self.get_alive_workers_count()):
+		# 		StopRunner.objects.create()
+		# elif querysets:
+		# 	for queryset in querysets:
+		# 		queryset.interrupt()
+		#
+		self.executor.shutdown(wait=True)
 		try:
 			self.message_queue.put(None)
 		except Exception:
 			pass
-		self.message_queue.close()
-		self.message_queue.join_thread()
+		try:
+			self.message_queue.close()
+		except Exception:
+			pass
+		try:
+			self.message_queue.join_thread()
+		except Exception:
+			pass
 		self.message_thread.join()
-		# self.queryset.interrupt()
 		self.logger.info("SHUTDOWN")
 
 
-def run(timeout=None, message_queue=None):
+querysets = []
+
+
+def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 	scheduler = BackgroundScheduler(timezone=utc)
 	scheduler.start()
 
@@ -356,7 +447,10 @@ def run(timeout=None, message_queue=None):
 			runner_class = RunningRescheduled
 		else:
 			if task.generator:
-				runner_class = RunningGenerator
+				if task.options.get('wait_for_iteration'):
+					runner_class = RunningGeneratorWaiting
+				else:
+					runner_class = RunningGenerator
 			else:
 				runner_class = RunningTask
 
@@ -377,15 +471,32 @@ def run(timeout=None, message_queue=None):
 		task.signal(TaskScheduled, when=date_time)
 
 	# Main loop
-	for event in Message.objects(processed=False).tail(timeout):
+	# import signal
+
+	queryset = Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False)
+	queryset._flag = run_flag
+
+	# def inner_handler(s, f):
+	# 	pass
+
+	# try:
+	# 	signal.signal(signal.SIGINT, inner_handler)
+	# except ValueError:
+	# 	print('UNSUCCESSFULL')
+	# 	pass
+		# querysets.append(queryset)
+
+	# StopRunner.objects(processed=False).update(set__processed=True)
+	for event in queryset.tail(timeout):
+	# for event in Message.objects(processed=False).tail(timeout):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
 			continue
 
 		message_queue.put('Process %r' % event)
 
-		if isinstance(event, StopRunner):
-			message_queue.put('Runner is stopped')
-			return
+		# if isinstance(event, StopRunner):
+		# 	message_queue.put('Runner is stopped')
+		# 	return
 
 		if not isinstance(event, TaskMessage):
 			continue
@@ -401,3 +512,43 @@ def run(timeout=None, message_queue=None):
 
 		if handler(task, event) is False:
 			break
+
+
+def default_runner():
+	# import signal
+	import sys
+	import os.path
+
+	config = sys.argv[1] if len(sys.argv) > 1 else None
+	if config is not None:
+		config = os.path.expanduser(os.path.expandvars(config))
+
+		if not os.path.exists(config):
+			sys.exit('Error: Config file is not exists.')
+
+		if not os.path.isfile(config):
+			sys.exit('Error: Config must be a file.')
+
+	runner = Runner(config)
+
+	def handler(sig, fr):
+		import sys
+		sys.exit(0)
+		# runner.shutdown()
+
+	# signal.signal(signal.SIGINT, handler)
+
+	try:
+		runner.run(block=True)
+	finally:
+		# import ipdb; ipdb.set_trace()
+		runner.shutdown()
+
+	# if isinstance(runner.executor, ProcessPoolExecutor):
+	# 	ex = runner.executor._processes
+	# 	for p in ex:
+	# 		p.join()
+	# else:
+	# 	while any(th.is_alive() for th in runner.executor._threads):
+	# 		import time; time.sleep(0.1)
+

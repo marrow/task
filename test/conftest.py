@@ -3,7 +3,6 @@
 import pytest
 import mongoengine
 
-import threading
 from functools import partial
 
 from marrow.task.message import Message
@@ -15,6 +14,7 @@ def connection(request):
 	"""Automatically connect before testing and discard data after testing."""
 	connection = mongoengine.connect('testing')
 	connection.testing.drop_collection("TaskQueue")
+	connection.testing.create_collection('test_data')
 	try:
 		connection.testing.create_collection(
 			Message._meta['collection'],

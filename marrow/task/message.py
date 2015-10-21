@@ -4,8 +4,7 @@ from __future__ import unicode_literals
 
 from datetime import datetime
 
-from pytz import utc
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
+from mongoengine import Document, ReferenceField, IntField, EmbeddedDocumentField, BooleanField, DynamicField, DateTimeField
 
 from .compat import py2, py3, unicode
 from .queryset import CappedQuerySet
@@ -110,28 +109,34 @@ class TaskProgress(TaskMessage):
 	
 	While the latest `current` and `total` values are mirrored on the Task record, all messages are recorded there.
 	"""
-	
+
+	NORMAL, FINISHED, FAILED = range(3)
+
 	current = IntField(db_field='a')
 	total = IntField(db_field='b')
-	
-	message = StringField(db_field='mm', default=None)
-	replacements = DictField(db_field='mr', default=None)
-	
+
+	result = DynamicField(db_field='r')
+	status = IntField(db_field='st', default=NORMAL, choices=[
+		(NORMAL, 'normal'),
+		(FINISHED, 'finished'),
+		(FAILED, 'failed'),
+	])
+
 	@property
 	def percentage(self):
 		return self.current * 1.0 / self.total
 	
 	def __repr__(self, inner=None):
-		pct = "{0:.0%}%".format(self.percentage) if self.total else "N/A"
-		msg = '"{0}"'.format(self.message.format(**self.replacements)) if self.message else "None"
-		return super(TaskProgress, self).__repr__('{0.current}/{0.total}, {1}, message={2}'.format(self, pct, msg))
+		pct = "{0:.0%}".format(self.percentage) if self.total else "N/A"
+		msg = unicode(self.result)
+		return super(TaskProgress, self).__repr__('{0.current}/{0.total}, {1}, result={2}, status={3}'.format(self, pct, msg, self.get_status_display()))
 	
 	def __unicode__(self):
-		if self.message:
-			return self.message.format(**self.replacements)
+		if self.result:
+			return unicode(self.result)
 		
 		if self.total:
-			return "{0:.0%}%".format(self.percentage)
+			return "{0:.0%}".format(self.percentage)
 		
 		return "Task indicates progress."
 	
@@ -210,18 +215,3 @@ class TaskComplete(TaskFinished):
 
 class IterationRequest(TaskMessage):
 	pass
-
-
-class TaskIterated(TaskMessage):
-	NORMAL, FINISHED, FAILED = range(3)
-
-	status = IntField(db_field='st', default=0)
-	result = DynamicField(db_field='r')
-
-	def __unicode__(self):
-		if self.status == self.FAILED:
-			return "Task {0.task.id} iteration failed.".format(self)
-		return "Task {0.task.id} iteration completed.".format(self)
-
-	if py3:  # pragma: no cover
-		__str__ = __unicode__

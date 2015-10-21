@@ -3,7 +3,12 @@
 from __future__ import print_function, unicode_literals
 
 from time import time
+from logging import getLogger
+
 from mongoengine import QuerySet, Q
+
+
+log = getLogger(__name__)
 
 
 class CappedQuerySet(QuerySet):
@@ -12,10 +17,13 @@ class CappedQuerySet(QuerySet):
 	def __init__(self, *args, **kwargs):
 		super(CappedQuerySet, self).__init__(*args, **kwargs)
 		self._running = True
+		self._flag = None
 
 	def interrupt(self):
 		"""Set `_running` flag to False, thus stop fetching database after current iteration."""
 		self._running = False
+		if self._flag is not None:
+			self._flag.value = False
 
 	def tail(self, timeout=None):
 		"""A generator which will block and yield entries as they are added to the collection.
@@ -46,26 +54,29 @@ class CappedQuerySet(QuerySet):
 		
 		# We track the last seen ID to allow us to efficiently re-query from where we left off.
 		last = None
-		
-		while self._running:
+
+		while getattr(self._flag, 'value', self._running):
 			cursor = collection.find(query, tailable=True, await_data=True, **q._cursor_args)
 			
-			while self._running:
+			while getattr(self._flag, 'value', self._running):
 				try:
 					record = next(cursor)
 				except StopIteration:
+					if timeout and time() >= end:
+						return
+
 					if not cursor.alive:
 						break
-					
+
 					record = None
-				
+
 				if record is not None:
+					if timeout:
+						end = time() + timeout
+
 					yield self._document._from_son(record, _auto_dereference=self._auto_dereference)
 					last = record['_id']
-				
-				if timeout and time() >= end:
-					return
-			
+
 			if last:
 				query.update(_id={"$gt": last})
 
@@ -115,3 +126,34 @@ class TaskQuerySet(QuerySet):
 		"""Search for tasks that were explicitly cancelled."""
 		
 		return self.clone().filter(time__cancelled__ne=None).filter(*q_objs, **query)
+
+	def cancel(self, *q_objs, **query):
+		"""Cancel selected tasks."""
+
+		from datetime import datetime
+		from pytz import utc
+		from .message import TaskCancelled
+
+		count = 0
+
+		for task in self.clone().filter(*q_objs, **query).scalar('id'):
+			if self.scalar('time__frequency').filter(id=task) is None:
+				qkws = {'time__executed': None}
+			else:
+				qkws = {}
+
+			if not self.filter(id=task, **qkws).update(set__time__cancelled=datetime.utcnow().replace(tzinfo=utc)):
+				continue
+
+			for i in range(3):  # We attempt three times to notify the queue.
+				try:
+					TaskCancelled(task=task).save()
+				except:
+					log.exception("Unable to broadcast cancellation of task {0}.".format(task),
+							extra = dict(task=task, attempt=i + 1))
+				else:
+					count += 1
+					log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
+					break
+
+		return count

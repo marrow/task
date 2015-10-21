@@ -3,19 +3,13 @@
 from __future__ import unicode_literals
 
 from logging import getLogger
-from inspect import isclass, ismethod, isgeneratorfunction
 from pytz import utc
 from datetime import datetime
-from bson import ObjectId
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField
-from marrow.package.canonical import name
 from marrow.package.loader import load
 
-from .compat import py2, unicode
-from .exc import AcquireFailed
-from .queryset import TaskQuerySet
-from .structure import Owner, Retry, Progress, Times
-from .message import TaskMessage, TaskAcquired, TaskAdded, TaskCancelled
+from .compat import unicode
+from .structure import Owner
+from .message import TaskAcquired
 
 
 log = getLogger(__name__)  # General messages.

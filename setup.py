@@ -38,8 +38,15 @@ class PyTest(TestCommand):
 
 here = os.path.abspath(os.path.dirname(__file__))
 
-tests_require = ['pytest', 'pytest-cov', 'pytest-spec', 'pytest_cagoule', 'pytest-flakes']
+py2 = sys.version_info < (3,)
+py26 = sys.version_info < (2, 7)
+py32 = sys.version_info > (3,) and sys.version_info < (3, 3)
 
+tests_require = ['coverage' + ('<4' if py32 else ''), 'pytest', 'pytest-cov', 'pytest-spec', 'pytest_cagoule', 'pytest-flakes']
+
+install_requires = [
+		'apscheduler', 'pymongo==2.8', 'mongoengine==0.9.0', 'pytz', 'marrow.package<2.0', 'wrapt<2.0', 'pyyaml'
+	] + (['futures'] if py2 else []) + (['ordereddict'] if py26 else [])
 
 setup(
 	name = "marrow.task",
@@ -76,7 +83,7 @@ setup(
 	include_package_data = True,
 	namespace_packages = ['marrow'],
 	
-	install_requires = ['apscheduler', 'pymongo==2.8', 'mongoengine==0.9.0', 'pytz', 'marrow.package<2.0', 'wrapt<2.0', 'pyyaml'] + (['futures'] if sys.version_info < (3,) else []),
+	install_requires = install_requires,
 	
 	extras_require = dict(
 			development = tests_require,
@@ -88,11 +95,15 @@ setup(
 			'futures.executor': [
 					'thread = concurrent.futures:ThreadPoolExecutor',
 					'process = concurrent.futures:ProcessPoolExecutor',
+				],
+			'console_scripts': [
+					'marrow.task = marrow.task.runner:default_runner',
+					'marrow.task.test = marrow.task.runner:test_func',
 				]
 		},
 
 	zip_safe = False,
 	cmdclass = dict(
 			test = PyTest,
-		)
+		),
 )

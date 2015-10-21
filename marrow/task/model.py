@@ -4,22 +4,20 @@ from __future__ import unicode_literals
 
 import pickle
 from logging import getLogger
-from inspect import isclass, ismethod, isgeneratorfunction, isgenerator
+from inspect import isgenerator
 from pytz import utc
 from datetime import datetime
 from concurrent.futures import CancelledError
-from bson import ObjectId
-from mongoengine import Document, ReferenceField, IntField, StringField, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField, DateTimeField, GenericReferenceField
+from mongoengine import (Document, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField,
+						 GenericReferenceField, DoesNotExist)
 from wrapt.wrappers import FunctionWrapper
-from marrow.package.canonical import name
-from marrow.package.loader import load
 
 from .compat import py2, py33, unicode, range, zip
-from .exc import AcquireFailed, TimeoutError
+from .exc import TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import (TaskMessage, TaskAcquired, TaskAdded, TaskCancelled, TaskComplete, TaskIterated, TaskFinished,
-					  StopRunner, TaskCompletedPeriodic, ReschedulePeriodic)
+from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, StopRunner,
+					  TaskCompletedPeriodic, TaskProgress)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
 
@@ -41,7 +39,7 @@ def encode(obj):
 
 def decode(string):
 	if py2:
-		string = string.decode('ascii')
+		string = str(string.decode('ascii'))
 	return pickle.loads(string)
 
 
@@ -53,9 +51,35 @@ class GeneratorTaskIterator(object):
 	def __init__(self, task, gen):
 		self.task = task
 		self.generator = gen
+		self.iteration = 0
+		self.total = None
 
 	def __iter__(self):
 		return self
+
+	def process_iteration_result(self, result, status):
+		self.iteration += 1
+
+		if isinstance(result, TaskProgress):
+			if result.id is None:
+				result.save()
+			return result.result
+
+		if not (isinstance(result, (tuple, list)) and len(result) in (2, 3)):
+			self.task.signal(TaskProgress, current=self.iteration, total=self.total, result=result, status=status)
+			return result
+
+		self.iteration, self.total = result[:2]
+		data = {
+			'current': self.iteration,
+			'total': self.total,
+			'result': None
+		}
+		if len(result) > 2:
+			data['result'] = result[2]
+
+		self.task.signal(TaskProgress, status=status, **data)
+		return data['result']
 
 	def next(self):
 		try:
@@ -63,20 +87,21 @@ class GeneratorTaskIterator(object):
 
 		except StopIteration as exception:
 			value = getattr(exception, 'value', None)
-			self.task.signal(TaskIterated, status=TaskIterated.FINISHED, result=value)
+			self.process_iteration_result(value, TaskProgress.FINISHED)
 			self.task._complete_task()
 			raise
 
 		except Exception as exception:
 			exc = self.task.set_exception(exception)
-			self.task.signal(TaskIterated, status=TaskIterated.FAILED, result=exc)
+			self.process_iteration_result(exc, TaskProgress.FAILED)
 			self.task._complete_task()
-			raise StopIteration()
+			raise StopIteration
 
 		else:
-			Task.objects(id=self.task.id).update(push__task_result=item)
-			self.task.signal(TaskIterated, status=TaskIterated.NORMAL, result=item)
-			return item
+			result = self.process_iteration_result(item, TaskProgress.NORMAL)
+			Task.objects(id=self.task.id).update(push__task_result=result)
+			self.task._invoke_callbacks(iteration=True)
+			return result
 
 	__next__ = next
 
@@ -110,9 +135,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	owner = EmbeddedDocumentField(Owner, db_field='o')
 	retry = EmbeddedDocumentField(Retry, db_field='r', default=Retry)
 	progress = EmbeddedDocumentField(Progress, db_field='p', default=Progress)
+	options = DictField(db_field='op')
 	
 	# Python Magic Methods
-	
+
 	def __repr__(self, inner=None):
 		if inner:
 			return '{0.__class__.__name__}({0.id}, {0.state}, host={1.host}, pid={1.pid}, ppid={1.ppid}, {2})'.format(self, self.creator, inner)
@@ -132,9 +158,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if caller_frame.f_code.co_filename.startswith(mongoengine_path):
 			return super(Task, self).__iter__()
 
-		return self.result_iterator()
+		return self.iterator()
 
-	def _result_iterator(self):
+	def _generator_iterator(self):
 		if self.done:
 			for item in self.result:
 				yield item
@@ -142,9 +168,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 		from marrow.task.message import IterationRequest
 
-		self.signal(IterationRequest)
-		for entry in TaskIterated.objects(task=self).tail():
-			if entry.status == TaskIterated.FINISHED:
+		if self.options.get('wait_for_iteration'):
+			self.signal(IterationRequest)
+		for entry in TaskProgress.objects(task=self).tail():
+			if entry.status == TaskProgress.FINISHED:
 				if entry.result is not None:
 					yield entry.result
 
@@ -153,22 +180,42 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				else:
 					raise StopIteration
 
-			elif entry.status == TaskIterated.FAILED:
+			elif entry.status == TaskProgress.FAILED:
 				raise self.exception
 
 			if entry.result is not None:
 				yield entry.result
 
-			self.signal(IterationRequest)
+			if self.options.get('wait_for_iteration'):
+				self.signal(IterationRequest)
 
-	def result_iterator(self):
-		"""Iterate the results of a generator task.
+	def _periodic_iterator(self):
+		stop_index = None
+		for current, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
+			if isinstance(event, (TaskCompletedPeriodic, TaskCancelled)):
+				stop_index = TaskComplete.objects(task=self).count()
 
-		It is an error condition to attempt to iterate a non-generator task.
+			else:
+				if not event.success:
+					raise decode(event.result['exception'])
+
+				yield event.result
+
+			if stop_index is not None and current >= stop_index:
+				raise StopIteration
+
+	def iterator(self):
+		"""Iterate the results of a generator or periodic task.
+
+		It is an error condition to attempt to iterate a non-generator or non-periodic task.
 		"""
-		if not self.generator:
-			raise ValueError('Cannot use on non-generator tasks.')
-		return self._result_iterator()
+		if not (self.generator or self.time.frequency):
+			raise ValueError('Only periodic and generator tasks are iterable.')
+
+		if self.time.frequency:
+			return self._periodic_iterator()
+
+		return self._generator_iterator()
 
 	def __str__(self):
 		"""Get the unicode string result of this task."""
@@ -255,35 +302,33 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		if not self.done:
 			self.wait()
 
-		result, exception, freq = Task.objects.scalar('task_result', 'task_exception', 'time__frequency').get(id=self.id)
+		try:
+			result, exception, freq = Task.objects.scalar('task_result', 'task_exception', 'time__frequency').get(id=self.id)
+		except DoesNotExist:
+			return None
+
 		if freq is None:
 			if exception is not None:
 				raise decode(exception['exception'])
 			return result
 
-		def periodic_iterator():
-			stop_index = None
-			for count, event in enumerate(TaskFinished.objects(task=self).tail(), 1):
-				if isinstance(event, TaskCancelled):
-					raise CancelledError
+		event = TaskComplete.objects(task=self).order_by('-id').first()
+		if event is None:
+			if TaskCancelled.objects(task=self).count():
+				raise CancelledError
+			return None
 
-				if isinstance(event, TaskCompletedPeriodic):
-					stop_index = ReschedulePeriodic.objects(task=self).count()
+		if not event.success:
+			raise decode(event.result['exception'])
 
-				else:
-					if not event.success:
-						raise decode(event.result['exception'])
-
-					yield event.result
-
-				if stop_index is not None and count == stop_index:
-					raise StopIteration
-
-		return periodic_iterator()
+		return event.result
 
 	@property
 	def exception_info(self):
-		exc = Task.objects.scalar('task_exception').get(id=self.id)
+		try:
+			exc = Task.objects.scalar('task_exception').get(id=self.id)
+		except DoesNotExist:
+			return None, None
 		if exc is None:
 			return None, None
 		return decode(exc['exception']), exc['traceback']
@@ -292,10 +337,11 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def exception(self):
 		return self.exception_info[0]
 
-	def _invoke_callbacks(self):
+	def _invoke_callbacks(self, iteration=False):
 		from marrow.task import task
 
-		for callback in self.callbacks:
+		callbacks = self.options.get('iteration_callbacks', []) if iteration else self.callbacks
+		for callback in callbacks:
 			task(callback).defer(self)
 
 	def _complete_task(self):
@@ -304,12 +350,16 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		exception, result = Task.objects.scalar('task_exception', 'task_result').get(id=self.id)
 		self.signal(TaskComplete, success=self.task_exception is None, result=exception or result)
 
-		self.reload('callbacks', 'time')
+		try:
+			self.reload('callbacks', 'time')
+		except DoesNotExist:
+			return
+
 		if self.successful:
 			self._invoke_callbacks()
 
 	def handle(self):
-		if self.done:
+		if not self.time.frequency and self.done:
 			return self.task_result
 
 		func = self.callable
@@ -337,20 +387,34 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		self._complete_task()
 		return result
 
-	def add_done_callback(self, callback):
+	def add_callback(self, callback, iteration=False):
 		from marrow.task import task
 
 		if self.done or self.cancelled:
 			task(callback).defer(self)
 			return
 
-		self.callbacks.append(callback)
-		self.save()
+		if not iteration:
+			self.callbacks.append(callback)
+			self.save()
+			return
 
-	def wait(self, timeout=None):
-		for event in TaskFinished.objects(task=self).tail(timeout):
+		prf = PythonReferenceField()
+		prf.validate(callback)
+		Task.objects(id=self.id).update(push__options__iteration_callbacks=prf.to_mongo(callback))
+
+	def wait(self, timeout=None, periodic=False):
+		msgclasses = [TaskComplete, TaskCancelled]
+		if self.time.scheduled is None and self.time.until is None:
+			periodic = False
+		if periodic:
+			msgclasses.append(TaskCompletedPeriodic)
+		msgclasses = [cls._class_name for cls in msgclasses]
+		for event in TaskFinished.objects(task=self, __raw__={'_cls': {'$in': msgclasses}}).tail(timeout):
 			if isinstance(event, TaskCancelled):
 				raise CancelledError
+			if periodic and not isinstance(event, TaskCompletedPeriodic):
+				continue
 			break
 		else:
 			raise TimeoutError('%r is timed out.' % self)
@@ -409,14 +473,14 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	@classmethod
 	def submit(cls, fn, *args, **kwargs):
 		"""Submit a task for execution as soon as possible."""
-		
+		from marrow.task.future import TaskFuture
+
 		log.info("", fn)
 		
 		record = cls(callable=fn, args=args, kwargs=kwargs).save()  # Step one, create and save a pending task record.
 		record.signal(TaskAdded)  # Step two, notify everyone waiting for tasks.
 		
-		# Because the record acts like a Futures object, we can just return it.
-		return record
+		return TaskFuture(record)
 	
 	@classmethod
 	def at(cls, dt, fn, *args, **kw):
@@ -490,44 +554,18 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				message.save()
 			except Exception:
 				pass
+			else:
+				break
 
 	# Futures-compatible future API.
 	
-	@classmethod
-	def cancel(cls, task):
+	def cancel(self):
 		"""Cancel the task if possible.
 		
 		Returns True if the task was cancelled, False otherwise.
 		"""
 		
-		task = ObjectId(getattr(task, 'id', task))
-		
-		log.debug("Attempting to cancel task {0}.".format(task), extra=dict(task=task))
-
-		# Atomically attempt to mark the task as cancelled if it hasn't been executed yet.
-		# If the task has already been run (completed or not) it's too late to cancel it.
-		# Interesting side-effect: multiple calls will cancel multiple times, updating the time of cancellation.
-		if Task.objects.scalar('time__frequency').get(id=task) is None:
-			qkws = {'time__executed': None}
-		else:
-			qkws = {}
-		if not Task.objects(id=task, **qkws).update(set__time__cancelled=utcnow()):
-			return False
-		
-		for i in range(3):  # We attempt three times to notify the queue.
-			try:
-				TaskCancelled(task=task).save()
-			except:
-				log.exception("Unable to broadcast cancellation of task {0}.".format(task),
-						extra = dict(task=task, attempt=i + 1))
-			else:
-				break
-		else:
-			return False
-		
-		log.info("task {0} cancelled".format(task), extra=dict(task=task, action='cancel'))
-
-		return True
+		return bool(Task.objects.cancel(id=self.id))
 
 	# Properties
 	@property
