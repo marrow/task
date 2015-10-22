@@ -31,21 +31,25 @@ def connection(request):
 
 @pytest.fixture(scope='function', params=['thread', 'process'], ids=['thread', 'process'])
 def runner(request, connection):
+	from marrow.task.compat import py26
+	import marrow.task.runner
+
 	config = Runner._get_config('./example/config.yaml')
 	config['runner']['use'] = request.param
 	config['runner']['timeout'] = 10
 	runner = Runner(config)
-	# th = threading.Thread(target=runner.run)
 	runner.run()
 	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
 	# Add it as finalizer for same at failures.
 	def stop(wait=None):
-		# import ipdb; ipdb.set_trace()
 		runner.shutdown(True)
-		# th.join()
+		if not py26:
+			return
+		marrow.task.runner._manager.shutdown()
+		marrow.task.runner._manager.join()
+		marrow.task.runner._manager = None
 
 	runner.stop_test_runner = stop
 	request.addfinalizer(stop)
 
-	# th.start()
 	return runner

@@ -298,7 +298,7 @@ class TestTasks(object):
 		task = subject.at(dt, 2)
 		start = time.time()
 		assert task.result == 84
-		assert time.time() - start >= 5
+		assert abs(time.time() - start - 5) <= 0.5
 		runner.stop_test_runner()
 
 	def test_every_invocation(self, connection, runner):
