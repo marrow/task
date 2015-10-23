@@ -99,7 +99,11 @@ def task(_fn=None, defer=False, wait=False):
 	
 	By default calling the function will return a mock Task which will lazily execute the target callable the first
 	time its result is requested, in the thread that requested it.  You can change this to executing remotely by
-	default by calling the decorator with a truthy value passed via the `defer` keyword argument.  Regardless
+	default by calling the decorator with a truthy value passed via the `defer` keyword argument.  Regardless of this
+	setting, direct and remote calls can be accessed by `function.call` and `function.defer` respectively.
+
+	`wait` used in generator tasks. If `False` (by default) then all iterations will be executed by runner as fast
+	as possible. If `True` then next iteration will be called only when requested by client.
 	"""
 	
 	def decorate_task(fn):

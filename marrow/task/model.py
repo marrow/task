@@ -2,6 +2,8 @@
 
 from __future__ import unicode_literals
 
+import inspect
+import os.path
 import pickle
 from logging import getLogger
 from inspect import isgenerator
@@ -29,6 +31,9 @@ log_exc = getLogger('task.execute')  # Task execution notices.
 log_ = getLogger('task.')  #
 
 
+MONGOENGINE_PATH = os.path.dirname(inspect.getfile(Document))
+
+
 def encode(obj):
 	result = pickle.dumps(obj)
 	if py2:
@@ -47,7 +52,20 @@ def utcnow():
 
 
 class GeneratorTaskIterator(object):
+	"""Iterator used by generator tasks handler.
+
+	Store given generator and task. Iterates on generator, augment iteration result with progress metadata and store it
+	in database. Update task with exception and result, call it's callbacks if necessary. Signal with task progress."""
+
 	def __init__(self, task, gen):
+		""":param task: :class:`Task` instance of currently handled task.
+		:param generator: generator of given task.
+
+		**Attributes:**
+
+		* **iteration** -- index of current generator's iteration.
+		* **total** -- total count of iterations."""
+
 		self.task = task
 		self.generator = gen
 		self.iteration = 0
@@ -57,6 +75,10 @@ class GeneratorTaskIterator(object):
 		return self
 
 	def process_iteration_result(self, result, status):
+		"""Signal with task progress.
+
+		Augment result with progress metadata, if it not provided with result itself."""
+
 		self.iteration += 1
 
 		if isinstance(result, TaskProgress):
@@ -81,6 +103,10 @@ class GeneratorTaskIterator(object):
 		return data['result']
 
 	def next(self):
+		"""Iterate given generator.
+
+		Obtain next iteration's result. Signal with task progress. Update task's result and exception if necessary."""
+
 		try:
 			item = next(self.generator)
 
@@ -147,14 +173,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Python Magic Methods - These will block on task completion.
 
 	def __iter__(self):
-		import inspect
-		import os.path
-
 		# __iter__ used in model's save method.
 		# Get caller's file path and if it is not in mongoengine return iterator of task's result.
 		caller_frame = inspect.stack()[1][0]
-		mongoengine_path = os.path.dirname(inspect.getfile(Document))
-		if caller_frame.f_code.co_filename.startswith(mongoengine_path):
+		if caller_frame.f_code.co_filename.startswith(MONGOENGINE_PATH):
 			return super(Task, self).__iter__()
 
 		return self.iterator()

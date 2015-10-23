@@ -16,11 +16,12 @@ def _execute_callback(callable, task):
 
 
 class TaskFuture(Future):
-	""""""
-	
+	"""concurrent.futures.Future-like compatible wrapper of :class:`.Task`"""
+
 	__slots__ = ('_task', )
-	
+
 	def __init__(self, task):
+		""":param task: :class:`.Task` instance or it's id"""
 		self._task = getattr(task, 'pk', task)
 	
 	@property
