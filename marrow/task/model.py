@@ -5,8 +5,9 @@ from __future__ import unicode_literals
 import pickle
 from logging import getLogger
 from inspect import isgenerator
-from pytz import utc
 from datetime import datetime
+
+from pytz import utc
 from concurrent.futures import CancelledError
 from mongoengine import (Document, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField,
 						 GenericReferenceField, DoesNotExist)
@@ -16,11 +17,9 @@ from .compat import py2, py33, unicode, range, zip
 from .exc import TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, StopRunner,
-					  TaskCompletedPeriodic, TaskProgress)
+from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, TaskCompletedPeriodic, TaskProgress)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
-
 
 log = getLogger(__name__)  # General messages.
 
@@ -461,9 +460,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Futures-compatible executor API.
 	
 	def _notify_added(self):
-		try:
-			TaskAdded(task=self).save()
-		except:
+		if not self.signal(TaskAdded):
 			log.exception("Unable to submit task.")
 			self.cancel()
 			raise Exception("Unable to submit task.")
@@ -478,7 +475,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		log.info("", fn)
 		
 		record = cls(callable=fn, args=args, kwargs=kwargs).save()  # Step one, create and save a pending task record.
-		record.signal(TaskAdded)  # Step two, notify everyone waiting for tasks.
+		record._notify_added()  # Step two, notify everyone waiting for tasks.
 		
 		return TaskFuture(record)
 	
@@ -535,16 +532,6 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 		return map_iterator()
 
-	@classmethod
-	def shutdown(cls, wait=True):
-		"""Signal the worker pool that it should stop processing after currently executing tasks have completed."""
-		from marrow.task.runner import Runner
-		if isinstance(wait, Runner):
-			wait.shutdown()
-			return
-
-		StopRunner.objects.create()
-
 	# Helper methods.
 	def signal(self, kind, **kw):
 		message = kind(task=self, sender=self.creator, **kw)
@@ -555,7 +542,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			except Exception:
 				pass
 			else:
-				break
+				return True
+		return False
 
 	# Futures-compatible future API.
 	

@@ -14,6 +14,7 @@ from marrow.package.canonical import name
 from marrow.package.loader import load
 
 from .model import Task
+from marrow.task.mock import MockTask
 from .message import TaskAdded, TaskScheduled
 from .compat import str, unicode
 
@@ -32,7 +33,7 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
 		if not defer:
-			return wrapped(*args, **kwargs)
+			return MockTask(wrapped, args, kwargs)
 
 		task = Task(callable=name(wrapped))
 		task.generator = generator

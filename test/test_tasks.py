@@ -71,20 +71,6 @@ def sleep_subject(a, sleep=1):
 	return a
 
 
-_manager = None
-every_count = None
-
-
-def initialize():
-	global _manager, every_count
-
-	if _manager is not None:
-		return
-
-	_manager = Manager()
-	every_count = _manager.Value('i', 0)
-
-
 def task_callback(task):
 	result = "Callback for %s" % task.id
 	ModelForTest.objects.update(inc__data_field=1)
@@ -125,8 +111,8 @@ def assert_task(task, state='complete'):
 
 class TestTasks(object):
 	def test_result(self):
-		assert subject(2) == 84
-		assert subject.call(2) == 84
+		assert subject(2).result == 84
+		assert subject.call(2).result == 84
 
 	def test_defer(self, task):
 		assert task.state == 'pending'
