@@ -1,6 +1,5 @@
 # encoding: utf-8
 
-import pickle
 import logging
 
 try:
@@ -10,8 +9,7 @@ except ImportError:
 
 from copy import deepcopy
 from datetime import datetime
-from multiprocessing import Queue
-from multiprocessing.managers import BaseManager, Value, ValueProxy
+from multiprocessing import Manager
 from threading import Thread
 
 from pytz import utc
@@ -32,7 +30,6 @@ from marrow.task.compat import str, unicode, iterkeys, iteritems, itervalues
 
 
 LISTENED_MESSAGES = [
-	# StopRunner,
 	TaskAdded,
 	TaskScheduled,
 	TaskAddedRescheduled,
@@ -57,55 +54,23 @@ DEFAULT_CONFIG = dict(
 )
 
 
-class CustomManager(BaseManager):
-	pass
-
 _tasks_data = {}
 
 _manager = None
-_runners = None
 
 
 def _initialize():
-	global _manager, _runners
+	global _manager
 
 	if _manager is not None:
 		return
 
-	_manager = CustomManager()
-	_manager.register('Queue', Queue)
-	_manager.register('RunnersStorage', RunnersStorage, exposed=['__getitem__', '__setitem__', '__delitem__', 'get', 'get_data'])
-	_manager.register('Value', Value, ValueProxy)
-	_manager.start()
-
-	_runners = _manager.RunnersStorage()
-
-
-class RunnersStorage(object):
-	def __init__(self):
-		self._runners = {}
-
-	def __getitem__(self, item):
-		return self._runners[item]
-
-	def __setitem__(self, key, value):
-		data = self._runners
-		data[key] = value
-		self._runners = data
-
-	def __delitem__(self, key):
-		data = self._runners
-		del data[key]
-		self._runners = data
-
-	def get(self, key, default_value=None):
-		return self._runners.get(key, default_value)
-
-	def get_data(self):
-		return self._runners
+	_manager = Manager()
 
 
 def _run_periodic_task(task_id):
+	"""Called by scheduler. Signal that task should be executed. If task is not expired, reschedule next iteration."""
+
 	from marrow.task.model import Task
 
 	task = Task.objects.get(id=task_id)
@@ -139,46 +104,47 @@ EXCEPTION = 'EXCEPTION'
 RUNNER_EXCEPTION = 'RUNNER_EXCEPTION'
 
 
+def _process_exception(runner=False):
+	import sys, traceback
+
+	exc_type, exc_val, tb = sys.exc_info()
+	if isinstance(exc_val, DoesNotExist):
+		exc_val = DoesNotExist(*exc_val.args)
+	tb = ''.join(traceback.format_tb(tb))
+	exc = (exc_type, exc_val, tb)
+
+	return RunStatus(RUNNER_EXCEPTION if runner else EXCEPTION, exc)
+
+
 class RunningTask(object):
-	def __init__(self, task_id):
-		self.task_id = task_id
+	"""Task handler. Created by runner thread/process. Provide task's context and initiate task execution."""
+
+	def __init__(self, task):
+		self.task = task
 
 	def handle_task(self):
 		from marrow.task import task as task_decorator
 
-		task = self.get_task()
-
-		if not task.set_running_or_notify_cancel():
+		if not self.task.set_running_or_notify_cancel():
 			return RunStatus(FAILURE)
 
-		func = task.callable
+		func = self.task.callable
 		if not hasattr(func, 'context'):
 			func = task_decorator(func)
 
-		context = self.get_context(task)
+		context = self.get_context(self.task)
 		for key, value in iteritems(context):
 			setattr(func.context, key, value)
 
 		result = None
 		try:
-			result = task.handle()
-		except Exception as exc:
-			import sys, traceback
-
-			exc_type, exc_val, tb = sys.exc_info()
-			if isinstance(exc_val, DoesNotExist):
-				exc_val = DoesNotExist(*exc_val.args)
-			tb = ''.join(traceback.format_tb(tb))
-			exc = (exc_type, exc_val, tb)
-
-			if task.exception is None:
-				return RunStatus(RUNNER_EXCEPTION, exc)
-			return RunStatus(EXCEPTION, exc)
+			result = self.task.handle()
+		except Exception:
+			return _process_exception(self.task.exception is None)
 
 		return RunStatus(SUCCESS, result)
 
 	def handle(self):
-		del _runners[self.task_id]
 		return self.handle_task()
 
 	def get_context(self, task):
@@ -186,72 +152,87 @@ class RunningTask(object):
 			id = task.id,
 		)
 
-	def get_task(self):
-		from marrow.task.model import Task
-		try:
-			return Task.objects.get(id=self.task_id)
-		except DoesNotExist:
-			return None
-
 
 class RunningRescheduled(RunningTask):
+	"""Handle rescheduled tasks."""
+
 	def handle(self):
-		task = self.get_task()
-		task.acquire()
+		self.task.acquire()
 		result = super(RunningRescheduled, self).handle()
-		task.release()
+		self.task.release()
 		return result
 
 
 class RunningGenerator(RunningTask):
+	"""Handle generator tasks. Evaluate task's generator and call task's iteration callbacks."""
+
 	def handle(self):
 		result = self.handle_task()
 		if result.kind != SUCCESS:
 			return result
 
 		generator = result.data
-		task = self.get_task()
 		for item in generator:
-			task._invoke_callbacks()
-		del _runners[self.task_id]
+			self.task._invoke_callbacks()
 		return RunStatus(SUCCESS, None)
 
 
 class RunningGeneratorWaiting(RunningGenerator):
+	"""Handle generator tasks with `wait_for_iteration` option set to True.
+
+	Wait for `IterationRequest` before evaluation of next generator's iteration."""
+
 	def handle(self):
 		result = self.handle_task()
 		if result.kind != SUCCESS:
 			return result
 
 		generator = result.data
-		task = self.get_task()
-		for event in IterationRequest.objects(task=self.task_id).tail():
+		for event in IterationRequest.objects(task=self.task).tail():
 			try:
 				next(generator)
 			except StopIteration:
-				del _runners[self.task_id]
 				break
 			else:
-				task._invoke_callbacks()
+				self.task._invoke_callbacks()
 		return RunStatus(SUCCESS, None)
 
 
-def _process_task(task_id, message_queue=None):
-	runner = pickle.loads(_runners[task_id])
-	result = runner.handle()
+def _process_task(runner, message_queue=None):
+	try:
+		result = runner.handle()
+	except Exception:
+		result = _process_exception(True)
 
 	if message_queue is None or result is None:
 		return
 
 	if result.kind in (EXCEPTION, RUNNER_EXCEPTION):
 		exc_type, exc_val, tb = result.data
-		message_queue.put((exc_type, exc_val, tb, task_id, result.kind))
+		message_queue.put((exc_type, exc_val, tb, runner.task.id, result.kind))
 
 	else:
-		message_queue.put((result.kind, task_id))
+		message_queue.put((result.kind, runner.task.id))
 
 
 class Runner(object):
+	"""Runner that execute tasks.
+
+	All tasks running through executor that either instance of `ThreadPoolExecutor` or `ProcessPoolExecutor`.
+	Executor type selected by config `runner.use` key.
+	`runner.timeout` used to restrict runner's waiting time for new messages.
+	All other `runner` key-value pairs passed to executor's constructor.
+
+	`database` subdict passed entirely to PyMongo's `connect`.
+
+	`logging` subdict passed to python's logging configuration.
+
+	*Attributes:*
+
+	* **message_queue** -- queue that used for passing log information from execution threads/processes to runner.
+	* **message_thread** -- thread that evaluate `runner._handle_messages` and processes messages in `message_queue`.
+	"""
+
 	def __init__(self, config=None):
 		_initialize()
 
@@ -280,6 +261,8 @@ class Runner(object):
 		self.run_flags = []
 
 	def _handle_messages(self):
+		"""In infinite loop peek messages from queue and output it though logger."""
+
 		while True:
 			try:
 				data = self.message_queue.get(True)
@@ -312,6 +295,13 @@ class Runner(object):
 			self.logger.exception(error_msg)
 
 	def run(self, block=False):
+		"""Run runner.
+
+		Instantiate executor with given config. Setup message queue and message processing thread.
+		Run execution threads/processes with `run` function.
+
+		If `block` is true, wait while executor is alive."""
+
 		import ctypes
 
 		if self.get_alive_workers_count():
@@ -339,6 +329,13 @@ class Runner(object):
 
 	@staticmethod
 	def _get_config(config):
+		"""Get runner's config.
+
+		If `config` is None, return default config.
+		If `config` is dict update default config by it.
+		If `config` is string, open that file.
+		If `config` is file, it must be a valid YAML. Load it and merge with default config."""
+
 		base = deepcopy(DEFAULT_CONFIG)
 
 		if config is None:
@@ -365,11 +362,15 @@ class Runner(object):
 		return base
 
 	def _connect(self, config):
+		"""Connect to MongoDB with given config."""
+
 		if self._connection:
 			return
 		self._connection = connect(**config)
 
 	def get_alive_workers_count(self):
+		"""Return count of currently alive executor threads/processes."""
+
 		if self.executor is None:
 			return 0
 
@@ -392,6 +393,8 @@ class Runner(object):
 		return result
 
 	def shutdown(self, wait=None):
+		"""Shutdown runner."""
+
 		for flag in self.run_flags:
 			flag.value = False
 		# if wait:
@@ -435,14 +438,10 @@ def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 		task_id = unicode(task.id)
 		scheduler.add_job(_run_periodic_task, trigger=trigger, id=task_id, args=[task_id])
 
-		# message_queue.put('%s scheduled at %s' % (task_id, trigger))
-
 	def add_task(task, message):
 		if task.acquire() is None:
-			# message_queue.put('Failed to acquire lock on task: %r' % task)
 			return
 
-		# message_queue.put('Acquired lock on task: %r' % task)
 		if isinstance(message, TaskAddedRescheduled):
 			runner_class = RunningRescheduled
 		else:
@@ -454,12 +453,9 @@ def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 			else:
 				runner_class = RunningTask
 
-		task_id = unicode(task.id)
-		runner = runner_class(task_id)
-		# Use explicit pickling because of Python 3
-		_runners[task_id] = pickle.dumps(runner)
+		runner = runner_class(task)
 		try:
-			_process_task(task_id, message_queue)
+			_process_task(runner, message_queue)
 		except RuntimeError:
 			return False
 
@@ -486,17 +482,11 @@ def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
 	# 	pass
 		# querysets.append(queryset)
 
-	# StopRunner.objects(processed=False).update(set__processed=True)
 	for event in queryset.tail(timeout):
-	# for event in Message.objects(processed=False).tail(timeout):
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
 			continue
 
 		message_queue.put('Process %r' % event)
-
-		# if isinstance(event, StopRunner):
-		# 	message_queue.put('Runner is stopped')
-		# 	return
 
 		if not isinstance(event, TaskMessage):
 			continue

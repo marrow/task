@@ -12,7 +12,10 @@ log = getLogger(__name__)
 
 
 class CappedQuerySet(QuerySet):
-	"""A custom queryset that allows for tailing of capped collections."""
+	"""A custom queryset that allows for tailing of capped collections.
+
+	Waiting can be interrupted by `interrupt()` call.
+	If `_flag` is provided, then it must be boolean `multiprocessing.managers.Value instance."""
 
 	def __init__(self, *args, **kwargs):
 		super(CappedQuerySet, self).__init__(*args, **kwargs)
@@ -21,6 +24,7 @@ class CappedQuerySet(QuerySet):
 
 	def interrupt(self):
 		"""Set `_running` flag to False, thus stop fetching database after current iteration."""
+
 		self._running = False
 		if self._flag is not None:
 			self._flag.value = False

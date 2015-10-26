@@ -1,5 +1,6 @@
 # encoding: utf-8
-from marrow.task.compat import unicode, py2
+from .compat import unicode, py2
+from .model import FAILED, COMPLETE, CANCELLED, ACQUIRED, RUNNING, PENDING
 
 
 class MockTask(object):
@@ -9,7 +10,7 @@ class MockTask(object):
 		self.kwargs = kwargs
 		self._result = None
 		self._exception = None
-		self._state = 'pending'
+		self._state = PENDING
 
 	@property
 	def result(self):
@@ -22,7 +23,7 @@ class MockTask(object):
 	def cancel(self):
 		if self.done:
 			return False
-		self._state = 'cancelled'
+		self._state = CANCELLED
 		return True
 
 	def set_exception(self, exception):
@@ -32,19 +33,19 @@ class MockTask(object):
 		self._result = result
 
 	def handle(self):
-		self._state = 'running'
+		self._state = RUNNING
 		try:
 			self._result = self.fn(*self.args, **self.kwargs)
 		except Exception as exc:
 			self.set_exception(exc)
-			self._state = 'failed'
+			self._state = FAILED
 		else:
-			self._state = 'complete'
+			self._state = COMPLETE
 
 	def set_running_or_notify_cancel(self):
 		if self.cancelled:
 			return False
-		self._state = 'acquired'
+		self._state = ACQUIRED
 		return True
 
 	def __str__(self):
@@ -74,31 +75,31 @@ class MockTask(object):
 
 	@property
 	def waiting(self):
-		return self._state == 'pending'
+		return self._state == PENDING
 
 	@property
 	def cancelled(self):
 		"""Return True if the task has been cancelled."""
-		return self._state == 'cancelled'
+		return self._state == CANCELLED
 
 	@property
 	def running(self):
 		"""Return True if the task is currently executing."""
-		return self._state == 'running'
+		return self._state == RUNNING
 
 	@property
 	def done(self):
 		"""Return True if the task was cancelled or finished executing."""
-		return self._state in ('cancelled', 'complete')
+		return self._state in (CANCELLED, COMPLETE)
 
 	@property
 	def successful(self):
-		return self._state == 'complete' and self._exception is None
+		return self._state == COMPLETE and self._exception is None
 
 	@property
 	def failed(self):
-		return self._state == 'failed'
+		return self._state == FAILED
 
 	@property
 	def acquired(self):
-		return self._state == 'acquired'
+		return self._state == ACQUIRED
