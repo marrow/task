@@ -424,7 +424,16 @@ class Runner(object):
 querysets = []
 
 
-def run(timeout=None, message_queue=None, run_flag=None, run_lock=None):
+def run(timeout=None, message_queue=None, run_flag=None):
+	"""Main execution loop.
+
+	Instantiate scheduler for scheduled and periodic tasks.
+	Listen for messages enumerated in `LISTENED_MESSAGES` and process it.
+
+	:param timeout: timeout for message listening. Loop exit if no new messages within timeout.
+	:param message_queue: queue to which task handlers put log messages.
+	:param run_flag: boolean `multiprocessing.managers.Value` instance used for queryset interruption."""
+
 	scheduler = BackgroundScheduler(timezone=utc)
 	scheduler.start()
 
