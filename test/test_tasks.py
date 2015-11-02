@@ -2,12 +2,10 @@
 
 from __future__ import unicode_literals, print_function
 
-import threading
-from multiprocessing import Manager
 from time import sleep
 
 import pytest
-from mongoengine import Document, IntField
+from mongoengine import Document, IntField, ReferenceField
 
 from marrow.task import task as task_decorator
 from marrow.task import Task
@@ -16,6 +14,7 @@ from marrow.task.exc import TimeoutError
 
 
 class ModelForTest(Document):
+	task = ReferenceField(Task)
 	data_field = IntField()
 
 	def method(self, arg):
@@ -89,8 +88,8 @@ def exception_subject():
 
 @task_decorator
 def every_subject():
-	ModelForTest.objects.update(inc__data_field=1)
-	return ModelForTest.objects.scalar('data_field').first()
+	ModelForTest.objects(task=every_subject.context.id).update(inc__data_field=1)
+	return ModelForTest.objects(task=every_subject.context.id).scalar('data_field').first()
 
 
 @pytest.fixture(scope="function")
@@ -120,37 +119,20 @@ class TestTasks(object):
 
 	def test_defer_int(self, runner, task):
 		assert int(task) == 168
-		runner.stop_test_runner()
 
 	def test_defer_str(self, runner, task):
 		assert str(task) == "168"
-		runner.stop_test_runner()
 
 	def test_defer_float(self, runner):
 		task = subject.defer(14.2)
 		assert float(task) == 596.4
-		runner.stop_test_runner()
 
 	def test_runner(self, runner):
 		result = subject2(42)
 		assert str(result) == "String 42"
-		runner.stop_test_runner()
 
 	def test_generator(self):
-		from functools import partial
-
-		gen = generator_subject.defer()
-
-		def handle_generator(tid):
-			ta = Task.objects.get(id=tid)
-			iterator = ta.handle()
-			list(iterator)
-
-		handler = threading.Thread(target=partial(handle_generator, gen.id))
-		handler.start()
-
-		assert list(gen) == list(range(10))
-		handler.join()
+		assert list(generator_subject.defer().handle()) == list(range(10))
 
 	def test_generator_task(self, runner):
 		for i in range(runner.executor._max_workers + 2):
@@ -160,7 +142,6 @@ class TestTasks(object):
 			count = TaskProgress.objects.count()
 			assert list(task) == list(range(10))
 			assert TaskProgress.objects.count() == count
-		runner.stop_test_runner(5)
 
 	def test_generator_task_waiting(self, runner):
 		task = waiting_generator_subject.defer()
@@ -176,13 +157,11 @@ class TestTasks(object):
 		assert TaskProgress.objects.count() - base_count == 2
 		assert list(generator) == list(range(2, 10))
 		assert task.result == list(range(10))
-		runner.stop_test_runner()
 
 	@pytest.mark.skipif(not py33, reason="requires Python 3.3")
 	def test_generator_task_exception_value(self, runner):
 		task = generator_subject.defer(exc_val=42)
 		assert list(task) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42]
-		runner.stop_test_runner(5)
 
 	def test_generator_task_exception(self, runner):
 		task = subject.defer(42)
@@ -193,18 +172,16 @@ class TestTasks(object):
 		with pytest.raises(ValueError):
 			list(task)
 		assert 'FAILURE' in str(task.exception)
-		runner.stop_test_runner(5)
 
 	def test_generator_task_iteration_callback(self, connection, runner):
-		ModelForTest.objects.create(data_field=0)
+		current = ModelForTest.objects.first().data_field
 		task = generator_subject.defer()
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == 10)
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == current + 10)
 		task.add_callback(task_callback)
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == 11)
-		runner.stop_test_runner()
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == current + 11)
 
 	def test_submit(self, runner):
 		future = Task.submit(subject, 2)
@@ -212,7 +189,6 @@ class TestTasks(object):
 		future2 = Task.submit(sleep_subject, 42, 10)
 		with pytest.raises(TimeoutError):
 			future2.result(1)
-		runner.stop_test_runner()
 
 	def test_map(self, runner):
 		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
@@ -220,28 +196,24 @@ class TestTasks(object):
 		result = list(Task.map(map_subject, data))
 		assert Task.objects.count() - count == len(data)
 		assert result == ['Hail, %s!' % god for god in data]
-		runner.stop_test_runner()
 
 	def test_map_timeout(self, runner):
 		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
 		result = Task.map(sleep_subject, data, timeout=1)
 		with pytest.raises(TimeoutError):
 			list(result)
-		runner.stop_test_runner(True)
 
 	def test_callback(self, connection, runner):
-		ModelForTest.objects.create(data_field=0)
+		current = ModelForTest.objects.first().data_field
 		task = sleep_subject.defer(42)
 		task.add_callback(task_callback)
 		assert_task(task)
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == 1)
-		runner.stop_test_runner()
+		assert check(lambda: ModelForTest.objects.first().data_field == current + 1)
 
 	def test_context(self, runner):
 		task = context_subject.defer()
 		assert_task(task)
 		assert task.result == task.id
-		runner.stop_test_runner()
 
 	def test_exception(self, runner):
 		task = exception_subject.defer()
@@ -249,9 +221,10 @@ class TestTasks(object):
 			task.result
 		assert 'FAILURE' in str(exc.value)
 		assert_task(task, 'failed')
-		runner.stop_test_runner()
 
-	def test_acquire(self, task):
+	def test_acquire(self):
+		task = Task.objects.create(callable=subject)
+
 		assert task.release() is None
 		assert isinstance(task.acquire(), Task)
 		assert task.acquire() is None
@@ -274,7 +247,6 @@ class TestTasks(object):
 		instance = ModelForTest.objects.create(data_field=42)
 		task = task_decorator(instance.method).defer(2)
 		assert task.result == 84
-		runner.stop_test_runner()
 
 	def test_at_invocation(self, runner):
 		from datetime import datetime, timedelta
@@ -284,33 +256,30 @@ class TestTasks(object):
 		task = subject.at(dt, 2)
 		start = time.time()
 		assert task.result == 84
-		assert abs(time.time() - start - 5) <= 0.5
-		runner.stop_test_runner()
+		assert abs(time.time() - start - 5) <= 1.0
 
 	def test_every_invocation(self, connection, runner):
 		from marrow.task.message import TaskComplete
 
-		ModelForTest.objects.create(data_field=0)
 		task = every_subject.every(3)
+		ModelForTest.objects.create(task=task, data_field=0)
 		assert check(lambda: task.result == 1, min=4)
 		assert check(lambda: TaskComplete.objects(task=task).count() == 4, min=9)
 		task.cancel()
 		assert list(task) == [1, 2, 3, 4]
 		assert task.result == 4
-		runner.stop_test_runner()
 
 	def test_every_invocation_start_until(self, connection, runner):
 		from datetime import datetime, timedelta
 
 		from marrow.task.message import TaskComplete
 
-		ModelForTest.objects.create(data_field=0)
 		start = datetime.now() + timedelta(seconds=2)
 		end = start + timedelta(seconds=6)
 		task = every_subject.every(2, starts=start, ends=end)
+		ModelForTest.objects.create(task=task, data_field=0)
 		iterations_expected = int(total_seconds(end - start) // 2)
 		task.wait(periodic=True)
 		iterations_count = task.get_messages(TaskComplete).count()
 		assert iterations_count <= iterations_expected
 		assert list(task) == list(range(1, iterations_count + 1))
-		runner.stop_test_runner()
