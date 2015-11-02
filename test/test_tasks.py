@@ -21,15 +21,18 @@ class ModelForTest(Document):
 		return self.data_field * arg
 
 
-def check(predicate, min=0):
+def check(predicate, expected, min=0, max=0):
 	count = 0
 	sleep(min)
-	while count < 10:
+	limit = 10 if max == 0 else (max - min) * 2
+	result = None
+	while count < limit:
 		sleep(0.5)
-		if predicate():
+		result = predicate()
+		if result == expected:
 			return True
 		count += 1
-	return False
+	raise ValueError('%r != %r' % (result, expected))
 
 
 @task_decorator
@@ -179,9 +182,9 @@ class TestTasks(object):
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == current + 10)
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first(), current + 10)
 		task.add_callback(task_callback)
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first() == current + 11)
+		assert check(lambda: ModelForTest.objects.scalar('data_field').first(), current + 11)
 
 	def test_submit(self, runner):
 		future = Task.submit(subject, 2)
@@ -208,7 +211,7 @@ class TestTasks(object):
 		task = sleep_subject.defer(42)
 		task.add_callback(task_callback)
 		assert_task(task)
-		assert check(lambda: ModelForTest.objects.first().data_field == current + 1)
+		assert check(lambda: ModelForTest.objects.first().data_field, current + 1)
 
 	def test_context(self, runner):
 		task = context_subject.defer()
@@ -263,8 +266,8 @@ class TestTasks(object):
 
 		task = every_subject.every(3)
 		ModelForTest.objects.create(task=task, data_field=0)
-		assert check(lambda: task.result == 1, min=4)
-		assert check(lambda: TaskComplete.objects(task=task).count() == 4, min=9)
+		assert check(lambda: task.result, 1, min=4)
+		assert check(lambda: TaskComplete.objects(task=task).count(), 4, min=9, max=20)
 		task.cancel()
 		assert list(task) == [1, 2, 3, 4]
 		assert task.result == 4
