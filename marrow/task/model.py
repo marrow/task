@@ -2,11 +2,14 @@
 
 from __future__ import unicode_literals
 
+import inspect
+import os.path
 import pickle
 from logging import getLogger
 from inspect import isgenerator
-from pytz import utc
 from datetime import datetime
+
+from pytz import utc
 from concurrent.futures import CancelledError
 from mongoengine import (Document, DictField, EmbeddedDocumentField, BooleanField, DynamicField, ListField,
 						 GenericReferenceField, DoesNotExist)
@@ -16,11 +19,9 @@ from .compat import py2, py33, unicode, range, zip
 from .exc import TimeoutError
 from .queryset import TaskQuerySet
 from .structure import Owner, Retry, Progress, Times
-from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, StopRunner,
-					  TaskCompletedPeriodic, TaskProgress)
+from .message import (TaskMessage, TaskAdded, TaskCancelled, TaskComplete, TaskFinished, TaskCompletedPeriodic, TaskProgress)
 from .methods import TaskPrivateMethods
 from .field import PythonReferenceField
-
 
 log = getLogger(__name__)  # General messages.
 
@@ -28,6 +29,16 @@ log_acq = getLogger('task.acquire')  # Task acquisition notices.
 log_rel = getLogger('task.release')  # Task release notices.
 log_exc = getLogger('task.execute')  # Task execution notices.
 log_ = getLogger('task.')  #
+
+
+MONGOENGINE_PATH = os.path.dirname(inspect.getfile(Document))
+
+CANCELLED = 'cancelled'
+FAILED = 'failed'
+COMPLETE = 'complete'
+RUNNING = 'running'
+ACQUIRED = 'acquired'
+PENDING = 'pending'
 
 
 def encode(obj):
@@ -48,7 +59,20 @@ def utcnow():
 
 
 class GeneratorTaskIterator(object):
+	"""Iterator used by generator tasks handler.
+
+	Store given generator and task. Iterates on generator, augment iteration result with progress metadata and store it
+	in database. Update task with exception and result, call it's callbacks if necessary. Signal with task progress."""
+
 	def __init__(self, task, gen):
+		""":param task: :class:`Task` instance of currently handled task.
+		:param generator: generator of given task.
+
+		**Attributes:**
+
+		* **iteration** -- index of current generator's iteration.
+		* **total** -- total count of iterations."""
+
 		self.task = task
 		self.generator = gen
 		self.iteration = 0
@@ -58,6 +82,15 @@ class GeneratorTaskIterator(object):
 		return self
 
 	def process_iteration_result(self, result, status):
+		"""Signal with task progress.
+
+		Make task progress record with given data and status.
+		If `result` is 2-element tuple, then first element is current iteration number and second element is total
+		count of iterations. If third element provided, then it is result of iteration.
+		In other cases `result` stored as iteration result and iteration and total count taken from iterator itself.
+
+		Returns iteration result."""
+
 		self.iteration += 1
 
 		if isinstance(result, TaskProgress):
@@ -82,6 +115,10 @@ class GeneratorTaskIterator(object):
 		return data['result']
 
 	def next(self):
+		"""Iterate given generator.
+
+		Obtain next iteration's result. Signal with task progress. Update task's result and exception if necessary."""
+
 		try:
 			item = next(self.generator)
 
@@ -148,14 +185,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Python Magic Methods - These will block on task completion.
 
 	def __iter__(self):
-		import inspect
-		import os.path
-
 		# __iter__ used in model's save method.
 		# Get caller's file path and if it is not in mongoengine return iterator of task's result.
 		caller_frame = inspect.stack()[1][0]
-		mongoengine_path = os.path.dirname(inspect.getfile(Document))
-		if caller_frame.f_code.co_filename.startswith(mongoengine_path):
+		if caller_frame.f_code.co_filename.startswith(MONGOENGINE_PATH):
 			return super(Task, self).__iter__()
 
 		return self.iterator()
@@ -224,23 +257,23 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	def __bytes__(self):
 		"""Get the byte string result of this task."""
 		return unicode(self).encode('unicode_escape')
-	
+
 	def __int__(self):
+		"""Get the int result of this task."""
 		return int(self.result)
-	
+
 	def __float__(self):
+		"""Get the float result of this task."""
 		return float(self.result)
 	
 	if py2:  # pragma: no cover
 		__unicode__ = __str__
 		__str__ = __bytes__
 	
-	def next(self, timeout=None):
-		pass  # TODO
-	
-	__next__ = next
-
 	def get_messages(self, kind=TaskMessage):
+		"""Return a tailable query matching all messages of given kind for this task.
+		By default return all messages."""
+
 		return kind.objects(task=self)
 
 	# Marrow Task API
@@ -256,32 +289,29 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		"""Return a token indicating the current state of the task."""
 		
 		if self.time.cancelled:
-			return 'cancelled'
+			return CANCELLED
 		
 		if self.time.completed:
 			if self.exception:
-				return 'failed'
+				return FAILED
 			
-			return 'complete'
+			return COMPLETE
 		
 		if self.time.executed:
-			return 'running'
+			return RUNNING
 		
 		if self.time.acquired:
-			return 'acquired'
+			return ACQUIRED
 		
-		return 'pending'
+		return PENDING
 	
 	@property
 	def performance(self):
 		"""Determine various timed durations involved with this task.
 		
 		The values of the dictionary represent "in" times, i.e. "acquired in X", "executed in X", etc.
-		
 		If a value is None then the job hasn't entered a state where measurements for that value can be provided.
-		
-		These values represent how long it took for the state change to occur, not from the inital scheduling time.
-		
+		These values represent how long it took for the state change to occur, not from the initial scheduling time.
 		Note, also, that these values aren't "live"; `.reload()` the record beforehand if needed.
 		"""
 		
@@ -299,6 +329,14 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	@property
 	def result(self):
+		"""Return task result.
+
+		If task is not completed yet, wait for completion.
+		If task is not periodic, return it's result or raise it's exception.
+
+		If task is periodic, return result or raise exception of last iteration or
+		raise CancelledError if task is cancelled."""
+
 		if not self.done:
 			self.wait()
 
@@ -325,6 +363,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	@property
 	def exception_info(self):
+		"""Return task's exception and it's traceback."""
+
 		try:
 			exc = Task.objects.scalar('task_exception').get(id=self.id)
 		except DoesNotExist:
@@ -335,6 +375,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 	@property
 	def exception(self):
+		"""Return task's exception."""
+
 		return self.exception_info[0]
 
 	def _invoke_callbacks(self, iteration=False):
@@ -345,6 +387,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			task(callback).defer(self)
 
 	def _complete_task(self):
+		"""Set task as completed. Emit signal with corresponded `success` status and result or exception.
+		Call completion callbacks if task completed successfully."""
+
 		Task.objects(id=self.id).update(set__time__completed=utcnow())
 
 		exception, result = Task.objects.scalar('task_exception', 'task_result').get(id=self.id)
@@ -359,6 +404,13 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			self._invoke_callbacks()
 
 	def handle(self):
+		"""Handle task execution.
+
+		If task not periodic and completed already, return it's result.
+
+		Call task's callable with stored arguments.
+		If task is not generator, set task's result or exception and return result."""
+
 		if not self.time.frequency and self.done:
 			return self.task_result
 
@@ -372,8 +424,12 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 		result = None
 
+		from .mock import MockTask
+
 		try:
 			result = func(*self.args, **self.kwargs)
+			if isinstance(result, MockTask):
+				result = result.result
 		except Exception as exception:
 			self.set_exception(exception)
 			self._complete_task()
@@ -388,6 +444,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return result
 
 	def add_callback(self, callback, iteration=False):
+		"""Add callback to task.
+
+		If `iteration` is true, then callback will be called at every iteration, else on task completion only."""
+
 		from marrow.task import task
 
 		if self.done or self.cancelled:
@@ -404,6 +464,12 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		Task.objects(id=self.id).update(push__options__iteration_callbacks=prf.to_mongo(callback))
 
 	def wait(self, timeout=None, periodic=False):
+		"""Wait for task completion.
+
+		Wait for task completion.
+		If `timeout` provided, wait for that amount seconds at most.
+		If task is periodic and `periodic` is true, wait for all task completion instead of first iteration."""
+
 		msgclasses = [TaskComplete, TaskCancelled]
 		if self.time.scheduled is None and self.time.until is None:
 			periodic = False
@@ -425,6 +491,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Futures-compatible pseudo-internal API.
 	
 	def set_running_or_notify_cancel(self):
+		"""Set task as running and return true if it was acquired or return false if it was cancelled."""
+
 		if self.cancelled:
 			return False
 		if self.acquired:
@@ -437,6 +505,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		return result
 	
 	def set_exception(self, exception):
+		"""Set task's exception to currently handled exception or to provided if no current."""
+
 		import sys, traceback
 
 		if exception is None:
@@ -456,14 +526,13 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				traceback = tb
 			)
 		Task.objects(id=self.id).update(set__task_exception=exc)
+		del tb
 		return exc
 	
 	# Futures-compatible executor API.
 	
 	def _notify_added(self):
-		try:
-			TaskAdded(task=self).save()
-		except:
+		if not self.signal(TaskAdded):
 			log.exception("Unable to submit task.")
 			self.cancel()
 			raise Exception("Unable to submit task.")
@@ -473,12 +542,13 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	@classmethod
 	def submit(cls, fn, *args, **kwargs):
 		"""Submit a task for execution as soon as possible."""
+
 		from marrow.task.future import TaskFuture
 
 		log.info("", fn)
 		
 		record = cls(callable=fn, args=args, kwargs=kwargs).save()  # Step one, create and save a pending task record.
-		record.signal(TaskAdded)  # Step two, notify everyone waiting for tasks.
+		record._notify_added()  # Step two, notify everyone waiting for tasks.
 		
 		return TaskFuture(record)
 	
@@ -499,6 +569,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 		
 		Raises TimeoutError if __next__ is called and the result isn't available within timeout seconds.
 		"""
+
 		timeout = kw.pop('timeout', None)
 
 		if kw: raise TypeError("unexpected keyword argument: {0}".format(', '.join(kw)))
@@ -535,18 +606,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 		return map_iterator()
 
-	@classmethod
-	def shutdown(cls, wait=True):
-		"""Signal the worker pool that it should stop processing after currently executing tasks have completed."""
-		from marrow.task.runner import Runner
-		if isinstance(wait, Runner):
-			wait.shutdown()
-			return
-
-		StopRunner.objects.create()
-
 	# Helper methods.
 	def signal(self, kind, **kw):
+		"""Emit message of provided type with this task."""
+
 		message = kind(task=self, sender=self.creator, **kw)
 		
 		for i in range(3):
@@ -555,7 +618,8 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			except Exception:
 				pass
 			else:
-				break
+				return True
+		return False
 
 	# Futures-compatible future API.
 	
@@ -570,31 +634,42 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 	# Properties
 	@property
 	def waiting(self):
+		"""Return True if the task has been accepted for work, but isn't yet running."""
+
 		return bool(Task.objects.accepted(id=self.id).count())
 
 	@property
 	def cancelled(self):
 		"""Return True if the task has been cancelled."""
+
 		return bool(Task.objects.cancelled(id=self.id).count())
 
 	@property
 	def running(self):
 		"""Return True if the task is currently executing."""
+
 		return bool(Task.objects.running(id=self.id).count())
 
 	@property
 	def done(self):
 		"""Return True if the task was cancelled or finished executing."""
+
 		return bool(Task.objects.finished(id=self.id).count())
 
 	@property
 	def successful(self):
+		"""Return True if the task was finished successfully."""
+
 		return bool(Task.objects.complete(id=self.id).count())
 
 	@property
 	def failed(self):
+		"""Return True if the task was finished with exception."""
+
 		return bool(Task.objects.failed(id=self.id).count())
 
 	@property
 	def acquired(self):
+		"""Return True if the task was acquired by runner for execution."""
+
 		return bool(Task.objects(id=self.id, time__acquired__ne=None).count())

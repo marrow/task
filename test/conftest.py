@@ -9,7 +9,7 @@ from marrow.task.message import Message
 from marrow.task.runner import Runner
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def connection(request):
 	"""Automatically connect before testing and discard data after testing."""
 	connection = mongoengine.connect('testing')
@@ -25,27 +25,26 @@ def connection(request):
 	except Exception:
 		pass
 
+	from .test_tasks import ModelForTest
+	ModelForTest.objects.create(data_field=0)
+
 	request.addfinalizer(partial(connection.drop_database, 'testing'))
 	return connection
 
 
-@pytest.fixture(scope='function', params=['thread', 'process'], ids=['thread', 'process'])
+@pytest.fixture(scope='module', params=['thread', 'process'], ids=['thread', 'process'])
 def runner(request, connection):
 	config = Runner._get_config('./example/config.yaml')
 	config['runner']['use'] = request.param
 	config['runner']['timeout'] = 10
 	runner = Runner(config)
-	# th = threading.Thread(target=runner.run)
 	runner.run()
 	# Use `runner.stop_test_runner` at end of the test for ensure that runner thread is stopped.
 	# Add it as finalizer for same at failures.
 	def stop(wait=None):
-		# import ipdb; ipdb.set_trace()
 		runner.shutdown(True)
-		# th.join()
 
 	runner.stop_test_runner = stop
 	request.addfinalizer(stop)
 
-	# th.start()
 	return runner

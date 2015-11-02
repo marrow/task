@@ -43,13 +43,6 @@ class Message(Document):
 		__unicode__ = __str__
 		__str__ = __bytes__
 
-	# def process(self):
-	# 	Message.objects(id=self.id).update(set___processed=True)
-	#
-	# @property
-	# def processed(self):
-	# 	return Message.objects.scalar('_processed').get(id=self.id)
-
 
 class Keepalive(Message):
 	"""An empty message used as a keepalive.
@@ -57,10 +50,6 @@ class Keepalive(Message):
 	Due to a quirk in MongoDB, a capped collection must have at least one record before you can 'tail' it.
 	"""
 	
-	pass
-
-
-class StopRunner(Message):
 	pass
 
 
@@ -92,6 +81,8 @@ class TaskAdded(TaskMessage):
 
 
 class TaskAddedRescheduled(TaskAdded):
+	"""Task has been added to the queue in result of prior reschedule."""
+
 	pass
 
 
@@ -146,6 +137,7 @@ class TaskProgress(TaskMessage):
 
 class TaskAcquired(TaskMessage):
 	"""Indicate that a task has been acquired by a worker."""
+
 	owner = EmbeddedDocumentField(Owner, db_field='o')
 	
 	def __unicode__(self):
@@ -156,6 +148,8 @@ class TaskAcquired(TaskMessage):
 
 
 class ReschedulePeriodic(TaskMessage):
+	"""Indicates that next periodic task's iteration will be requested at specified time."""
+
 	when = DateTimeField(db_field='w')
 
 	def __repr__(self, inner=None):
@@ -174,6 +168,7 @@ class TaskRetry(TaskMessage):
 
 class TaskFinished(TaskMessage):
 	"""Common parent class for cancellation or completion."""
+
 	pass
 
 
@@ -188,6 +183,8 @@ class TaskCancelled(TaskFinished):
 
 
 class TaskCompletedPeriodic(TaskFinished):
+	"""Indicate completion of last iteration of periodic task."""
+
 	pass
 
 
@@ -214,4 +211,6 @@ class TaskComplete(TaskFinished):
 
 
 class IterationRequest(TaskMessage):
+	"""Indicate that client need next iteration of generator task."""
+
 	pass

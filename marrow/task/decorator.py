@@ -14,6 +14,7 @@ from marrow.package.canonical import name
 from marrow.package.loader import load
 
 from .model import Task
+from marrow.task.mock import MockTask
 from .message import TaskAdded, TaskScheduled
 from .compat import str, unicode
 
@@ -32,7 +33,7 @@ def _decorate_task(defer=False, generator=False, scheduled=False, repeating=Fals
 	@decorator
 	def _decorate_task_inner(wrapped, instance, args, kwargs):
 		if not defer:
-			return wrapped(*args, **kwargs)
+			return MockTask(wrapped, args, kwargs)
 
 		task = Task(callable=name(wrapped))
 		task.generator = generator
@@ -98,7 +99,11 @@ def task(_fn=None, defer=False, wait=False):
 	
 	By default calling the function will return a mock Task which will lazily execute the target callable the first
 	time its result is requested, in the thread that requested it.  You can change this to executing remotely by
-	default by calling the decorator with a truthy value passed via the `defer` keyword argument.  Regardless
+	default by calling the decorator with a truthy value passed via the `defer` keyword argument.  Regardless of this
+	setting, direct and remote calls can be accessed by `function.call` and `function.defer` respectively.
+
+	`wait` used in generator tasks. If `False` (by default) then all iterations will be executed by runner as fast
+	as possible. If `True` then next iteration will be called only when requested by client.
 	"""
 	
 	def decorate_task(fn):

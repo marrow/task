@@ -1,17 +1,14 @@
 # encoding: utf-8
 
-"""Custom MongoDB field types."""
-
-
-# TBD: A field that transforms a callable into a string reference using marrow.package on assignment, then back to the
-# callable when accessing.
-
 from mongoengine.fields import BaseField
 from marrow.package.canonical import name
 from marrow.package.loader import load
 
 
 class PythonReferenceField(BaseField):
+	"""A field that transforms a callable into a string reference using marrow.package on assignment, then back to the
+	callable when accessing."""
+
 	def to_python(self, value):
 		if callable(value):
 			return value
