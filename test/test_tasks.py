@@ -75,7 +75,7 @@ def sleep_subject(a, sleep=1):
 
 def task_callback(task):
 	result = "Callback for %s" % task.id
-	ModelForTest.objects.update(inc__data_field=1)
+	ModelForTest.objects(task=task).update(inc__data_field=1)
 	return result
 
 
@@ -177,14 +177,14 @@ class TestTasks(object):
 		assert 'FAILURE' in str(task.exception)
 
 	def test_generator_task_iteration_callback(self, connection, runner):
-		current = ModelForTest.objects.first().data_field
 		task = generator_subject.defer()
+		ModelForTest.objects.create(task=task, data_field=0)
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first(), current + 10)
+		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 10)
 		task.add_callback(task_callback)
-		assert check(lambda: ModelForTest.objects.scalar('data_field').first(), current + 11)
+		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 11)
 
 	def test_submit(self, runner):
 		future = Task.submit(subject, 2)
@@ -207,11 +207,11 @@ class TestTasks(object):
 			list(result)
 
 	def test_callback(self, connection, runner):
-		current = ModelForTest.objects.first().data_field
 		task = sleep_subject.defer(42)
+		ModelForTest.objects.create(task=task, data_field=0)
 		task.add_callback(task_callback)
 		assert_task(task)
-		assert check(lambda: ModelForTest.objects.first().data_field, current + 1)
+		assert check(lambda: ModelForTest.objects(task=task).first().data_field, 1)
 
 	def test_context(self, runner):
 		task = context_subject.defer()
