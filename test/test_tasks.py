@@ -182,9 +182,9 @@ class TestTasks(object):
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 10)
+		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 10, max=10)
 		task.add_callback(task_callback)
-		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 11)
+		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 11, max=10)
 
 	def test_submit(self, runner):
 		future = Task.submit(subject, 2)
@@ -255,11 +255,11 @@ class TestTasks(object):
 		from datetime import datetime, timedelta
 		import time
 
-		dt = datetime.now() + timedelta(seconds=5)
+		dt = datetime.now() + timedelta(seconds=20)
 		task = subject.at(dt, 2)
 		start = time.time()
 		assert task.result == 84
-		assert abs(time.time() - start - 5) <= 1.0
+		assert abs(time.time() - start - 20) <= 5
 
 	def test_every_invocation(self, connection, runner):
 		from marrow.task.message import TaskComplete
