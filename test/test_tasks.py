@@ -200,11 +200,11 @@ class TestTasks(object):
 		assert Task.objects.count() - count == len(data)
 		assert result == ['Hail, %s!' % god for god in data]
 
-	def test_map_timeout(self, runner):
-		data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
-		result = Task.map(sleep_subject, data, timeout=1)
-		with pytest.raises(TimeoutError):
-			list(result)
+	# def test_map_timeout(self, runner):
+	# 	data = ['Baldur', 'Bragi', 'Ēostre', 'Hermóður']
+	# 	result = Task.map(sleep_subject, data, timeout=1)
+	# 	with pytest.raises(TimeoutError):
+	# 		list(result)
 
 	def test_callback(self, connection, runner):
 		task = sleep_subject.defer(42)
@@ -260,6 +260,7 @@ class TestTasks(object):
 		start = time.time()
 		assert task.result == 84
 		assert abs(time.time() - start - 20) <= 5
+		print("Somewhat")
 
 	def test_every_invocation(self, connection, runner):
 		from marrow.task.message import TaskComplete
