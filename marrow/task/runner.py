@@ -9,7 +9,7 @@ except ImportError:
 
 from copy import deepcopy
 from datetime import datetime
-from multiprocessing import Manager
+from multiprocessing import Manager, Queue
 
 from pytz import utc
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -38,6 +38,9 @@ LISTENED_MESSAGES = [
 LISTENED_MESSAGES = [cls._class_name for cls in LISTENED_MESSAGES]
 
 
+HALT = 'HALT'
+
+
 DEFAULT_CONFIG = dict(
 	runner = dict(
 		timeout = None,
@@ -53,13 +56,10 @@ DEFAULT_CONFIG = dict(
 )
 
 
-_tasks_data = {}
-
 _manager = None
 
 
-class RunnerStop(Exception):
-	pass
+global_message_queue = None
 
 
 def _initialize():
@@ -241,6 +241,9 @@ class Runner(object):
 	def __init__(self, config=None):
 		_initialize()
 
+		global global_message_queue
+		global_message_queue = Queue()
+
 		config = self._get_config(config)
 
 		self._executor_class = dict(
@@ -299,12 +302,12 @@ class Runner(object):
 				task_id, tb)
 			self.logger.exception(error_msg)
 
-	def _handle_messages_np(self):
+	def _handle_messages(self):
 		"""In infinite loop peek messages from queue and output it though logger."""
 
 		while True:
 			try:
-				data = self.message_queue.get(True)
+				data = global_message_queue.get(True)
 			except (IOError, EOFError, OSError):
 				return
 			except TypeError:
@@ -314,7 +317,7 @@ class Runner(object):
 				return
 
 			if isinstance(data, (str, unicode)):
-				if data == "HALT":
+				if data == HALT:
 					self.shutdown()
 					return
 
@@ -335,15 +338,13 @@ class Runner(object):
 				exc_type.__name__, exc_val,
 				'runner at ' if exc_kind == RUNNER_EXCEPTION else '',
 				task_id, tb)
-			self.logger.exception(error_msg)
+			self.logger.error(error_msg)
 
-	def run(self):#, block=False):
+	def run(self):
 		"""Run runner.
 
 		Instantiate executor with given config. Setup message queue and message processing thread.
-		Run execution threads/processes with `run` function.
-
-		If `block` is true, wait while executor is alive."""
+		Run execution threads/processes with `run` function."""
 
 		import ctypes
 
@@ -351,30 +352,13 @@ class Runner(object):
 			raise RuntimeError('Runner is already running')
 
 		self.executor = self._executor_class(**self._executor_config)
-		self.message_queue = _manager.Queue()
-
-		# self.message_thread = Thread(target=self._handle_messages, kwargs={'instance': self})
-		# self.message_thread.start()
-
 
 		for i in range(self.executor._max_workers):
 			flag = _manager.Value(ctypes.c_bool, True)
 			self.run_flags.append(flag)
-			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue, run_flag=flag)
+			self.executor.submit(run, timeout=self.timeout, message_queue=None, run_flag=flag)
 
-		self._handle_messages_np()
-
-		# # try:
-		# if block:
-		# 	if isinstance(self.executor, ProcessPoolExecutor):
-		# 		ex = self.executor._processes
-		# 		for p in ex:
-		# 			p.join()
-		# 	else:
-		# 		while any(th.is_alive() for th in self.executor._threads):
-		# 			import time; time.sleep(0.1)
-		# except RunnerStop:
-		# 	self.shutdown()
+		self._handle_messages()
 
 	@staticmethod
 	def _get_config(config):
@@ -444,44 +428,27 @@ class Runner(object):
 	def shutdown(self, wait=None):
 		"""Shutdown runner."""
 
-		# if self.__shutdowned:
-		# 	return
-
 		for flag in self.run_flags:
 			try:
 				flag.value = False
 			except Exception:
 				continue
-		# if wait:
-		# 	for i in range(self.get_alive_workers_count()):
-		# 		StopRunner.objects.create()
-		# elif querysets:
-		# 	for queryset in querysets:
-		# 		queryset.interrupt()
-		#
+
 		try:
-			self.message_queue.put(None)
-		except Exception:
-			pass
+			global_message_queue.put(None)
+		except Exception as e:
+			print(e)
 		try:
-			self.message_queue.close()
-		except Exception:
-			pass
-		if isinstance(self.executor, ProcessPoolExecutor):
-			self.executor._result_queue.put(None)
-			self.executor.shutdown(wait=True)
-			self.executor = None
-		else:
-			self.executor.shutdown(wait=True)
+			global_message_queue.close()
+		except Exception as e:
+			print(e)
 		try:
-			self.message_queue.cancel_join_thread()
-		except Exception:
-			pass
+			global_message_queue.cancel_join_thread()
+		except Exception as e:
+			print(e)
+		self.executor.shutdown(wait=True)
 		# self.message_thread.join()
 		self.logger.info("SHUTDOWN")
-
-
-querysets = []
 
 
 def run(timeout=None, message_queue=None, run_flag=None):
@@ -493,6 +460,8 @@ def run(timeout=None, message_queue=None, run_flag=None):
 	:param timeout: timeout for message listening. Loop exit if no new messages within timeout.
 	:param message_queue: queue to which task handlers put log messages.
 	:param run_flag: boolean `multiprocessing.managers.Value` instance used for queryset interruption."""
+
+	message_queue = global_message_queue
 
 	scheduler = BackgroundScheduler(timezone=utc)
 	scheduler.start()
@@ -506,9 +475,6 @@ def run(timeout=None, message_queue=None, run_flag=None):
 		trigger = DateTrigger(run_date=task.time.scheduled)
 		task_id = unicode(task.id)
 		scheduler.add_job(_run_periodic_task, trigger=trigger, id=task_id, args=[task_id])
-		# scheduler.print_jobs()
-		# import time; time.sleep(6)
-		# scheduler.print_jobs()
 
 	def add_task(task, message):
 		if task.acquire() is None:
@@ -581,9 +547,7 @@ def run(timeout=None, message_queue=None, run_flag=None):
 
 		if handler(task, event) is False:
 			break
-	# message_queue.put('HALT')
-	# raise RunnerStop
-
+	message_queue.put(HALT)
 
 
 def default_runner():
