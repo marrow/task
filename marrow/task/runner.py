@@ -273,40 +273,6 @@ class Runner(object):
 
 		while True:
 			try:
-				data = self.message_queue.get(True)
-			except (IOError, EOFError, OSError):
-				return
-			except TypeError:
-				continue
-
-			if data is None:
-				return
-
-			if isinstance(data, (str, unicode)):
-				self.logger.info(data)
-				continue
-
-			if len(data) == 2:
-				if data[0] == SUCCESS:
-					self.logger.info('Completed: %s', data[1])
-
-				elif data[1] == FAILURE:
-					self.logger.warning('Failed: %s', data[1])
-
-				continue
-
-			exc_type, exc_val, tb, task_id, exc_kind = data
-			error_msg = '%s(%s) in %stask %s:\n%s' % (
-				exc_type.__name__, exc_val,
-				'runner at ' if exc_kind == RUNNER_EXCEPTION else '',
-				task_id, tb)
-			self.logger.exception(error_msg)
-
-	def _handle_messages(self):
-		"""In infinite loop peek messages from queue and output it though logger."""
-
-		while True:
-			try:
 				data = global_message_queue.get(True)
 			except (IOError, EOFError, OSError):
 				return
