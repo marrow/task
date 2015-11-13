@@ -107,14 +107,15 @@ EXCEPTION = 'EXCEPTION'
 RUNNER_EXCEPTION = 'RUNNER_EXCEPTION'
 
 
-def _process_exception(runner=False):
+def _process_exception(runner=False, exctb=None):
 	import sys, traceback
 
 	exc_type, exc_val, tb = sys.exc_info()
 	if isinstance(exc_val, DoesNotExist):
 		exc_val = DoesNotExist(*exc_val.args)
-	tb = ''.join(traceback.format_tb(tb))
-	exc = (exc_type, exc_val, tb)
+	if exctb is None:
+		exctb = ''.join(traceback.format_tb(tb.tb_next))
+	exc = (exc_type, exc_val, exctb)
 
 	return RunStatus(RUNNER_EXCEPTION if runner else EXCEPTION, exc)
 
@@ -143,7 +144,8 @@ class RunningTask(object):
 		try:
 			result = self.task.handle()
 		except Exception:
-			return _process_exception(self.task.exception is None)
+			exc = self.task.exception
+			return _process_exception(exc is None, exctb=getattr(exc, 'original_traceback', None))
 
 		return RunStatus(SUCCESS, result)
 

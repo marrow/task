@@ -347,7 +347,9 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 
 		if freq is None:
 			if exception is not None:
-				raise decode(exception['exception'])
+				exc = decode(exception['exception'])
+				exc.original_traceback = exception['traceback']
+				raise exc
 			return result
 
 		event = TaskComplete.objects(task=self).order_by('-id').first()
@@ -371,7 +373,10 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 			return None, None
 		if exc is None:
 			return None, None
-		return decode(exc['exception']), exc['traceback']
+		tb = exc['traceback']
+		exc = decode(exc['exception'])
+		exc.original_traceback = tb
+		return exc, tb
 
 	@property
 	def exception(self):
@@ -519,6 +524,7 @@ class Task(TaskPrivateMethods, Document):  # , TaskPrivateMethods, TaskExecutorM
 				traceback = None
 			)
 		else:
+			tb = exception.__dict__.pop('_traceback', tb)
 			tb = tb.tb_next
 			tb = ''.join(traceback.format_exception(typ, value, tb))
 			exc = dict(

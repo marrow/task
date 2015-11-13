@@ -182,9 +182,9 @@ class TestTasks(object):
 		task.add_callback(task_callback, iteration=True)
 		assert_task(task)
 		assert list(task) == list(range(10))
-		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 10, max=10)
+		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 10, max=15)
 		task.add_callback(task_callback)
-		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 11, max=10)
+		assert check(lambda: ModelForTest.objects(task=task).scalar('data_field').first(), 11, max=15)
 
 	def test_submit(self, runner):
 		future = Task.submit(subject, 2)
@@ -264,24 +264,24 @@ class TestTasks(object):
 	def test_every_invocation(self, connection, runner):
 		from marrow.task.message import TaskComplete
 
-		task = every_subject.every(3)
+		task = every_subject.every(10)
 		ModelForTest.objects.create(task=task, data_field=0)
-		assert check(lambda: task.result, 1, min=4)
-		assert check(lambda: TaskComplete.objects(task=task).count(), 4, min=9, max=20)
+		assert check(lambda: task.result, 1, min=15)
+		assert check(lambda: TaskComplete.objects(task=task).count(), 3, min=15, max=26)
 		task.cancel()
-		assert list(task) == [1, 2, 3, 4]
-		assert task.result == 4
+		assert list(task) == [1, 2, 3]
+		assert task.result == 3
 
 	def test_every_invocation_start_until(self, connection, runner):
 		from datetime import datetime, timedelta
 
 		from marrow.task.message import TaskComplete
 
-		start = datetime.now() + timedelta(seconds=4)
-		end = start + timedelta(seconds=18)
-		task = every_subject.every(5, starts=start, ends=end)
+		start = datetime.now() + timedelta(seconds=5)
+		end = start + timedelta(seconds=30)
+		task = every_subject.every(10, starts=start, ends=end)
 		ModelForTest.objects.create(task=task, data_field=0)
-		iterations_expected = int(total_seconds(end - start) // 5)
+		iterations_expected = int(total_seconds(end - start) // 10)
 		task.wait(periodic=True)
 		iterations_count = task.get_messages(TaskComplete).count()
 		assert iterations_count <= iterations_expected
