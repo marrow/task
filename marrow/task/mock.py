@@ -1,4 +1,6 @@
 # encoding: utf-8
+import sys
+
 from .compat import unicode, py2
 from .model import FAILED, COMPLETE, CANCELLED, ACQUIRED, RUNNING, PENDING
 
@@ -28,6 +30,9 @@ class MockTask(object):
 
 	def set_exception(self, exception):
 		self._exception = exception
+
+		typ, val, tb = sys.exc_info()
+		self._exception._traceback = tb
 
 	def set_result(self, result):
 		self._result = result

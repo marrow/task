@@ -9,8 +9,7 @@ except ImportError:
 
 from copy import deepcopy
 from datetime import datetime
-from multiprocessing import Manager
-from threading import Thread
+from multiprocessing import Manager, Queue
 
 from pytz import utc
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -39,6 +38,9 @@ LISTENED_MESSAGES = [
 LISTENED_MESSAGES = [cls._class_name for cls in LISTENED_MESSAGES]
 
 
+HALT = 'HALT'
+
+
 DEFAULT_CONFIG = dict(
 	runner = dict(
 		timeout = None,
@@ -54,9 +56,10 @@ DEFAULT_CONFIG = dict(
 )
 
 
-_tasks_data = {}
-
 _manager = None
+
+
+global_message_queue = None
 
 
 def _initialize():
@@ -104,14 +107,15 @@ EXCEPTION = 'EXCEPTION'
 RUNNER_EXCEPTION = 'RUNNER_EXCEPTION'
 
 
-def _process_exception(runner=False):
+def _process_exception(runner=False, exctb=None):
 	import sys, traceback
 
 	exc_type, exc_val, tb = sys.exc_info()
 	if isinstance(exc_val, DoesNotExist):
 		exc_val = DoesNotExist(*exc_val.args)
-	tb = ''.join(traceback.format_tb(tb))
-	exc = (exc_type, exc_val, tb)
+	if exctb is None:
+		exctb = ''.join(traceback.format_tb(tb.tb_next))
+	exc = (exc_type, exc_val, exctb)
 
 	return RunStatus(RUNNER_EXCEPTION if runner else EXCEPTION, exc)
 
@@ -140,7 +144,8 @@ class RunningTask(object):
 		try:
 			result = self.task.handle()
 		except Exception:
-			return _process_exception(self.task.exception is None)
+			exc = self.task.exception
+			return _process_exception(exc is None, exctb=getattr(exc, 'original_traceback', None))
 
 		return RunStatus(SUCCESS, result)
 
@@ -198,21 +203,23 @@ class RunningGeneratorWaiting(RunningGenerator):
 		return RunStatus(SUCCESS, None)
 
 
-def _process_task(runner, message_queue=None):
+def _process_task(runner):#, message_queue=None):
 	try:
 		result = runner.handle()
 	except Exception:
 		result = _process_exception(True)
 
-	if message_queue is None or result is None:
+	if result is None:
 		return
+	# if message_queue is None or result is None:
+	# 	return
 
 	if result.kind in (EXCEPTION, RUNNER_EXCEPTION):
 		exc_type, exc_val, tb = result.data
-		message_queue.put((exc_type, exc_val, tb, runner.task.id, result.kind))
+		return (exc_type, exc_val, tb, runner.task.id, result.kind)
 
-	else:
-		message_queue.put((result.kind, runner.task.id))
+	# else:
+	return (result.kind, runner.task.id)
 
 
 class Runner(object):
@@ -235,6 +242,9 @@ class Runner(object):
 
 	def __init__(self, config=None):
 		_initialize()
+
+		global global_message_queue
+		global_message_queue = Queue()
 
 		config = self._get_config(config)
 
@@ -265,7 +275,7 @@ class Runner(object):
 
 		while True:
 			try:
-				data = self.message_queue.get(True)
+				data = global_message_queue.get(True)
 			except (IOError, EOFError, OSError):
 				return
 			except TypeError:
@@ -275,6 +285,10 @@ class Runner(object):
 				return
 
 			if isinstance(data, (str, unicode)):
+				if data == HALT:
+					self.shutdown()
+					return
+
 				self.logger.info(data)
 				continue
 
@@ -292,15 +306,13 @@ class Runner(object):
 				exc_type.__name__, exc_val,
 				'runner at ' if exc_kind == RUNNER_EXCEPTION else '',
 				task_id, tb)
-			self.logger.exception(error_msg)
+			self.logger.error(error_msg)
 
-	def run(self, block=False):
+	def run(self):
 		"""Run runner.
 
 		Instantiate executor with given config. Setup message queue and message processing thread.
-		Run execution threads/processes with `run` function.
-
-		If `block` is true, wait while executor is alive."""
+		Run execution threads/processes with `run` function."""
 
 		import ctypes
 
@@ -308,24 +320,13 @@ class Runner(object):
 			raise RuntimeError('Runner is already running')
 
 		self.executor = self._executor_class(**self._executor_config)
-		self.message_queue = _manager.Queue()
-
-		self.message_thread = Thread(target=self._handle_messages)
-		self.message_thread.start()
 
 		for i in range(self.executor._max_workers):
 			flag = _manager.Value(ctypes.c_bool, True)
 			self.run_flags.append(flag)
-			self.executor.submit(run, timeout=self.timeout, message_queue=self.message_queue, run_flag=flag)
+			self.executor.submit(run, timeout=self.timeout, message_queue=None, run_flag=flag)
 
-		if block:
-			if isinstance(self.executor, ProcessPoolExecutor):
-				ex = self.executor._processes
-				for p in ex:
-					p.join()
-			else:
-				while any(th.is_alive() for th in self.executor._threads):
-					import time; time.sleep(0.1)
+		self._handle_messages()
 
 	@staticmethod
 	def _get_config(config):
@@ -396,32 +397,26 @@ class Runner(object):
 		"""Shutdown runner."""
 
 		for flag in self.run_flags:
-			flag.value = False
-		# if wait:
-		# 	for i in range(self.get_alive_workers_count()):
-		# 		StopRunner.objects.create()
-		# elif querysets:
-		# 	for queryset in querysets:
-		# 		queryset.interrupt()
-		#
+			try:
+				flag.value = False
+			except Exception:
+				continue
+
+		try:
+			global_message_queue.put(None)
+		except Exception as e:
+			print(e)
+		try:
+			global_message_queue.close()
+		except Exception as e:
+			print(e)
+		try:
+			global_message_queue.cancel_join_thread()
+		except Exception as e:
+			print(e)
 		self.executor.shutdown(wait=True)
-		try:
-			self.message_queue.put(None)
-		except Exception:
-			pass
-		try:
-			self.message_queue.close()
-		except Exception:
-			pass
-		try:
-			self.message_queue.join_thread()
-		except Exception:
-			pass
-		self.message_thread.join()
+		# self.message_thread.join()
 		self.logger.info("SHUTDOWN")
-
-
-querysets = []
 
 
 def run(timeout=None, message_queue=None, run_flag=None):
@@ -433,6 +428,8 @@ def run(timeout=None, message_queue=None, run_flag=None):
 	:param timeout: timeout for message listening. Loop exit if no new messages within timeout.
 	:param message_queue: queue to which task handlers put log messages.
 	:param run_flag: boolean `multiprocessing.managers.Value` instance used for queryset interruption."""
+
+	message_queue = global_message_queue
 
 	scheduler = BackgroundScheduler(timezone=utc)
 	scheduler.start()
@@ -463,10 +460,14 @@ def run(timeout=None, message_queue=None, run_flag=None):
 				runner_class = RunningTask
 
 		runner = runner_class(task)
+		result = None
 		try:
-			_process_task(runner, message_queue)
+			result = _process_task(runner)
 		except RuntimeError:
 			return False
+
+		if message_queue and result is not None:
+			message_queue.put(result)
 
 	def reschedule_periodic(task, message):
 		from marrow.task.model import Task
@@ -478,7 +479,8 @@ def run(timeout=None, message_queue=None, run_flag=None):
 	# Main loop
 	# import signal
 
-	queryset = Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False)
+	# queryset = Message.objects(__raw__={'_cls': {'$in': LISTENED_MESSAGES}}, processed=False)
+	queryset = Message.objects()
 	queryset._flag = run_flag
 
 	# def inner_handler(s, f):
@@ -492,10 +494,12 @@ def run(timeout=None, message_queue=None, run_flag=None):
 		# querysets.append(queryset)
 
 	for event in queryset.tail(timeout):
+		# import random
+		# import time; time.sleep(random.random())
 		if not Message.objects(id=event.id, processed=False).update(set__processed=True):
 			continue
 
-		message_queue.put('Process %r' % event)
+		# message_queue.put('Process %r' % event)
 
 		if not isinstance(event, TaskMessage):
 			continue
@@ -511,6 +515,7 @@ def run(timeout=None, message_queue=None, run_flag=None):
 
 		if handler(task, event) is False:
 			break
+	message_queue.put(HALT)
 
 
 def default_runner():
