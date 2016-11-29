@@ -45,7 +45,7 @@ py32 = sys.version_info > (3,) and sys.version_info < (3, 3)
 tests_require = ['coverage' + ('<4' if py32 else ''), 'pytest', 'pytest-cov', 'pytest-spec', 'pytest_cagoule', 'pytest-flakes']
 
 install_requires = [
-		'apscheduler', 'pymongo==2.8', 'mongoengine==0.9.0', 'pytz', 'marrow.package<2.0', 'wrapt<2.0', 'pyyaml'
+		'apscheduler', 'pymongo==3.3.1', 'mongoengine==0.10.6', 'pytz', 'marrow.package<2.0', 'wrapt<2.0', 'pyyaml'
 	] + (['futures'] if py2 else []) + (['ordereddict'] if py26 else [])
 
 setup(
